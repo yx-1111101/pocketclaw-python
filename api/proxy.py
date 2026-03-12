@@ -43,6 +43,11 @@ async def unbind_device(device_id: str):
         await db.delete("device_bindings", {"device_id": devices[0]["id"]})
     return {"ok": True}
 
+@router.get("/{device_id}/metrics")
+async def get_device_metrics(device_id: str):
+    """获取设备指标"""
+    return {"cpu": 0, "memory": 0, "uptime": 0}
+
 @router.post("/{device_id}/gateway/{path:path}")
 async def gateway_proxy(device_id: str, path: str, request: Request):
     body = await request.body()
