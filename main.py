@@ -1,15 +1,15 @@
 """
 PocketClaw Cloud Service
-基于 FastAPI + WebSocket 的设备内网穿透服务
+基于 FastAPI + WebSocket + Supabase 的设备内网穿透服务
 """
 import json
 import os
 import uuid
 import asyncio
 import hashlib
+import httpx
 from datetime import datetime
-from pathlib import Path
-from typing import Dict, Optional
+from typing import Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,23 +18,72 @@ import uvicorn
 
 # ============== 配置 ==============
 PORT = int(os.getenv("PORT", 8764))
-DB_FILE = Path(os.getenv("DB_FILE", "data/devices.json"))
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://irbnhwtyhzltpjiuuyql.supabase.co")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlyYm5od3R5aHpsdHBqaXV1eXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MzMzMDc3NCwiZXhwIjoyMDg4OTA2Nzc0fQ.u0qwNGdrtniSxIlihYKpbM6HWh10UXlxPCE4y8-8Blk")
 DEFAULT_TOKEN = os.getenv("GATEWAY_TOKEN", "39353e14566ccc5caf8f6d588366b27a81f005e28b81b68c")
 
-# ============== 数据模型 ==============
-class Device(BaseModel):
-    device_id: str
-    public_url: str = ""
-    device_secret_hash: str = ""
-    firmware_version: str = "1.0.0"
-    version: str = "1.0.0"
-    status: str = "offline"
-    last_seen: int = 0
-    provisioned_at: int = 0
-    pairing_code_hash: Optional[str] = None
-    pairing_code_expires: Optional[int] = None
-    name: str = "我的盒子"
+# ============== Supabase 客户端 ==============
+class SupabaseClient:
+    def __init__(self, url: str, key: str):
+        self.url = url
+        self.key = key
+        self.headers = {
+            "apikey": key,
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+            "Prefer": "return=representation"
+        }
+    
+    async def get(self, table: str, filters: dict = None):
+        async with httpx.AsyncClient() as client:
+            params = filters or {}
+            resp = await client.get(
+                f"{self.url}/rest/v1/{table}",
+                headers=self.headers,
+                params=params
+            )
+            if resp.status_code >= 400:
+                return {"error": resp.text}
+            return resp.json()
+    
+    async def post(self, table: str, data: dict):
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{self.url}/rest/v1/{table}",
+                headers=self.headers,
+                json=data
+            )
+            if resp.status_code >= 400:
+                return {"error": resp.text}
+            return resp.json()
+    
+    async def patch(self, table: str, filters: dict, data: dict):
+        async with httpx.AsyncClient() as client:
+            # 构建 filter 字符串
+            filter_str = ",".join([f"{k}=eq.{v}" for k, v in filters.items()])
+            resp = await client.patch(
+                f"{self.url}/rest/v1/{table}?{filter_str}",
+                headers=self.headers,
+                json=data
+            )
+            if resp.status_code >= 400:
+                return {"error": resp.text}
+            return resp.json()
+    
+    async def delete(self, table: str, filters: dict):
+        async with httpx.AsyncClient() as client:
+            filter_str = ",".join([f"{k}=eq.{v}" for k, v in filters.items()])
+            resp = await client.delete(
+                f"{self.url}/rest/v1/{table}?{filter_str}",
+                headers=self.headers
+            )
+            if resp.status_code >= 400:
+                return {"error": resp.text}
+            return {"success": True}
 
+db = SupabaseClient(SUPABASE_URL, SUPABASE_KEY)
+
+# ============== 数据模型 ==============
 class HeartbeatRequest(BaseModel):
     device_id: str
     public_url: Optional[str] = None
@@ -49,130 +98,34 @@ class BindRequest(BaseModel):
     user_id: str
     pairing_code: Optional[str] = None
 
-# ============== 内存存储 ==============
-class DeviceStore:
-    def __init__(self):
-        self.devices: Dict[str, dict] = {}
-        self.bindings: Dict[str, str] = {}
-        self.users: Dict[str, dict] = {}  # user_id -> user data
-        self.openid_map: Dict[str, str] = {}  # openid -> user_id
-        self.load()
-    
-    def load(self):
-        """从文件加载数据"""
-        if DB_FILE.exists():
-            try:
-                data = json.loads(DB_FILE.read_text())
-                self.devices = data.get("devices", {})
-                self.bindings = data.get("bindings", {})
-                self.users = data.get("users", {})
-                # 重建 openid_map
-                self.openid_map = {v.get("openid", ""): k for k, v in self.users.items() if v.get("openid")}
-            except Exception as e:
-                print(f"加载数据失败: {e}")
-    
-    def save(self):
-        """保存数据到文件"""
-        DB_FILE.parent.mkdir(parents=True, exist_ok=True)
-        DB_FILE.write_text(json.dumps({
-            "devices": self.devices,
-            "bindings": self.bindings,
-            "users": self.users
-        }, indent=2, ensure_ascii=False))
-    
-    def get_device(self, device_id: str) -> Optional[dict]:
-        return self.devices.get(device_id)
-    
-    def update_device(self, device_id: str, data: dict):
-        existing = self.devices.get(device_id, {})
-        self.devices[device_id] = {**existing, **data, "device_id": device_id}
-        self.save()
-    
-    def bind_device(self, device_id: str, user_id: str):
-        self.bindings[device_id] = user_id
-        self.save()
-    
-    def unbind_device(self, device_id: str):
-        if device_id in self.bindings:
-            del self.bindings[device_id]
-            self.save()
-    
-    def is_bound(self, device_id: str) -> bool:
-        return device_id in self.bindings
-    
-    def get_user_id(self, device_id: str) -> Optional[str]:
-        return self.bindings.get(device_id)
-    
-    # 用户管理
-    def get_user(self, user_id: str) -> Optional[dict]:
-        return self.users.get(user_id)
-    
-    def get_user_by_openid(self, openid: str) -> Optional[dict]:
-        user_id = self.openid_map.get(openid)
-        if user_id:
-            return self.users.get(user_id)
-        return None
-    
-    def create_user(self, user_id: str, data: dict):
-        self.users[user_id] = {
-            "user_id": user_id,
-            "openid": data.get("openid", ""),
-            "phone": "",
-            "nickname": "",
-            "avatar": "",
-            "created_at": int(datetime.now().timestamp() * 1000)
-        }
-        if data.get("openid"):
-            self.openid_map[data["openid"]] = user_id
-        self.save()
-    
-    def update_user(self, user_id: str, data: dict):
-        if user_id in self.users:
-            self.users[user_id].update(data)
-            self.save()
-
-store = DeviceStore()
-
 # ============== WebSocket 管理 ==============
 class ConnectionManager:
-    """管理设备 WebSocket 连接"""
-    
     def __init__(self):
-        self.active_connections: Dict[str, WebSocket] = {}
-        self.pending_requests: Dict[str, asyncio.Future] = {}
+        self.active_connections: dict = {}
+        self.pending_requests: dict = {}
     
     async def connect(self, device_id: str, websocket: WebSocket):
         await websocket.accept()
         self.active_connections[device_id] = websocket
-        print(f"设备 {device_id} 已连接")
     
     def disconnect(self, device_id: str):
         if device_id in self.active_connections:
             del self.active_connections[device_id]
-        print(f"设备 {device_id} 已断开")
     
-    async def send_request(self, device_id: str, function: str, params: dict = None) -> dict:
-        """发送请求到设备，等待响应"""
+    async def send_request(self, device_id: str, function: str, params: dict = None):
         if device_id not in self.active_connections:
             raise HTTPException(status_code=404, detail=f"Device {device_id} not connected")
         
         websocket = self.active_connections[device_id]
         request_id = str(uuid.uuid4())
+        payload = {"request_id": request_id, "function": function, "params": params or {}}
         
-        payload = {
-            "request_id": request_id,
-            "function": function,
-            "params": params or {}
-        }
-        
-        # 创建 Future 等待响应
         loop = asyncio.get_event_loop()
         future = loop.create_future()
         self.pending_requests[request_id] = future
         
         try:
             await websocket.send_text(json.dumps(payload))
-            # 等待 10 秒超时
             result = await asyncio.wait_for(future, timeout=10.0)
             return {"status": "success", "data": result}
         except asyncio.TimeoutError:
@@ -185,7 +138,6 @@ class ConnectionManager:
             raise HTTPException(status_code=500, detail=str(e))
     
     async def handle_response(self, request_id: str, data: dict):
-        """处理设备返回的响应"""
         if request_id in self.pending_requests:
             self.pending_requests[request_id].set_result(data)
             del self.pending_requests[request_id]
@@ -194,8 +146,6 @@ manager = ConnectionManager()
 
 # ============== FastAPI 应用 ==============
 app = FastAPI(title="PocketClaw Cloud Service")
-
-# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -206,102 +156,108 @@ app.add_middleware(
 
 # ============== 辅助函数 ==============
 def is_online(device: dict) -> bool:
-    """检查设备是否在线（5分钟内有心跳）"""
     if not device:
         return False
-    return datetime.now().timestamp() * 1000 - (device.get("last_seen", 0)) < 5 * 60 * 1000
-
-def get_device_view(device_id: str) -> dict:
-    """获取设备视图"""
-    device = store.get_device(device_id)
-    if not device:
-        return None
-    
-    return {
-        "device_id": device_id,
-        "name": device.get("name", "我的盒子"),
-        "public_url": device.get("public_url", ""),
-        "device_secret_hash": device.get("device_secret_hash", ""),
-        "version": device.get("version", "1.0.0"),
-        "firmware_version": device.get("firmware_version", "1.0.0"),
-        "status": "online" if is_online(device) else device.get("status", "offline"),
-        "last_seen": device.get("last_seen", 0),
-        "provisioned_at": device.get("provisioned_at", 0),
-        "pairing_code_hash": device.get("pairing_code_hash"),
-        "pairing_code_expires": device.get("pairing_code_expires"),
-    }
+    last_seen = device.get("last_seen")
+    if not last_seen:
+        return False
+    return datetime.now().timestamp() * 1000 - last_seen < 5 * 60 * 1000
 
 def hash_sha256(data: str) -> str:
-    """SHA256 哈希"""
     return hashlib.sha256(data.encode()).hexdigest()
 
-# ============== 设备端接口 ==============
-
+# ============== 设备 WebSocket ==============
 @app.websocket("/proxy/{device_id}")
 async def proxy_websocket(websocket: WebSocket, device_id: str):
-    """设备 WebSocket 连接"""
     await manager.connect(device_id, websocket)
     try:
         while True:
             data = await websocket.receive_text()
-            print(f"收到设备 {device_id} 消息: {data}")
             try:
                 response = json.loads(data)
                 request_id = response.get("request_id")
                 if request_id:
                     await manager.handle_response(request_id, response.get("data"))
-            except json.JSONDecodeError:
+            except:
                 pass
     except WebSocketDisconnect:
         manager.disconnect(device_id)
     except Exception as e:
-        print(f"WebSocket 错误: {e}")
         manager.disconnect(device_id)
 
 # ============== 设备心跳 ==============
 @app.post("/v1/device/heartbeat")
 async def heartbeat(data: HeartbeatRequest):
-    """设备心跳"""
-    if not data.device_id:
-        return JSONResponse({"error": "device_id required"}, status_code=400)
+    # 查询设备是否存在
+    devices = await db.get("devices", {"device_id": data.device_id})
+    existing = devices[0] if devices and not isinstance(devices, dict) else None
     
-    existing = store.get_device(data.device_id) or {}
-    secret_hash = data.device_secret_hash or existing.get("device_secret_hash", "")
-    
-    store.update_device(data.device_id, {
-        "public_url": data.public_url or existing.get("public_url", ""),
-        "device_secret_hash": secret_hash,
-        "firmware_version": data.firmware_version or existing.get("firmware_version", "1.0.0"),
-        "version": data.firmware_version or existing.get("version", "1.0.0"),
+    update_data = {
         "status": "online",
         "last_seen": int(datetime.now().timestamp() * 1000),
-        "pairing_code_hash": data.pairing_code_hash if data.pairing_code_hash is not None else existing.get("pairing_code_hash"),
-        "pairing_code_expires": data.pairing_code_expires if data.pairing_code_expires is not None else existing.get("pairing_code_expires"),
-    })
+        "updated_at": datetime.now().isoformat()
+    }
     
-    is_bound = store.is_bound(data.device_id)
-    return {"success": True, "claimed": is_bound, "message": "ok"}
+    if data.public_url:
+        update_data["public_url"] = data.public_url
+    if data.firmware_version:
+        update_data["firmware_version"] = data.firmware_version
+    if data.pairing_code_hash is not None:
+        update_data["pairing_code_hash"] = data.pairing_code_hash
+    if data.pairing_code_expires is not None:
+        update_data["pairing_code_expires"] = datetime.fromtimestamp(data.pairing_code_expires).isoformat()
+    if data.device_secret_hash:
+        update_data["device_secret_hash"] = data.device_secret_hash
+    
+    if existing:
+        await db.patch("devices", {"device_id": data.device_id}, update_data)
+    else:
+        update_data["device_id"] = data.device_id
+        await db.post("devices", update_data)
+    
+    # 检查绑定
+    bindings = await db.get("device_bindings", {"device_id": existing["id"] if existing else "none"})
+    claimed = bool(bindings and len(bindings) > 0)
+    
+    return {"success": True, "claimed": claimed, "message": "ok"}
 
 # ============== 设备绑定 ==============
 @app.post("/v1/device/bind")
 async def bind(data: BindRequest):
-    """小程序绑定设备"""
-    if not data.device_id or not data.user_id:
-        return JSONResponse({"error": "device_id and user_id required"}, status_code=400)
+    # 查找设备
+    devices = await db.get("devices", {"device_id": data.device_id})
+    if not devices:
+        return JSONResponse({"error": "device not found"}, status_code=404)
     
-    device = store.get_device(data.device_id)
+    device = devices[0]
     
     # 验证 pairing_code
-    if data.pairing_code and device and device.get("pairing_code_hash"):
+    if data.pairing_code and device.get("pairing_code_hash"):
         input_hash = hash_sha256(data.pairing_code)
         if input_hash != device.get("pairing_code_hash"):
             return JSONResponse({"error": "pairing code mismatch"}, status_code=403)
         
         if device.get("pairing_code_expires"):
-            if datetime.now().timestamp() > device.get("pairing_code_expires"):
+            expires = device["pairing_code_expires"]
+            if isinstance(expires, str):
+                expires = datetime.fromisoformat(expires).timestamp()
+            if datetime.now().timestamp() > expires:
                 return JSONResponse({"error": "pairing code expired"}, status_code=403)
     
-    store.bind_device(data.device_id, data.user_id)
+    # 查找用户
+    users = await db.get("users", {"user_id": data.user_id})
+    if not users:
+        return JSONResponse({"error": "user not found"}, status_code=404)
+    
+    user = users[0]
+    
+    # 创建绑定
+    await db.post("device_bindings", {
+        "user_id": user["id"],
+        "device_id": device["id"],
+        "role": "owner"
+    })
+    
     return {"success": True, "claimed": True, "message": "ok"}
 
 # 兼容旧接口
@@ -312,6 +268,55 @@ async def heartbeat_legacy(data: HeartbeatRequest):
 @app.post("/device/bind")
 async def bind_legacy(data: BindRequest):
     return await bind(data)
+
+# ============== 小程序端接口 ==============
+
+@app.get("/device/{device_id}/status")
+async def get_status(device_id: str):
+    devices = await db.get("devices", {"device_id": device_id})
+    if not devices:
+        return JSONResponse({"error": "device not found"}, status_code=404)
+    device = devices[0]
+    return {"ok": True, "device": {
+        "device_id": device["device_id"],
+        "status": "online" if is_online(device) else device.get("status", "offline"),
+        "last_seen": device.get("last_seen", 0)
+    }}
+
+@app.get("/device/{device_id}")
+async def get_device(device_id: str):
+    devices = await db.get("devices", {"device_id": device_id})
+    if not devices:
+        return JSONResponse({"error": "device not found"}, status_code=404)
+    device = devices[0]
+    return {
+        "device_id": device["device_id"],
+        "name": device.get("name", "我的盒子"),
+        "public_url": device.get("public_url", ""),
+        "status": "online" if is_online(device) else device.get("status", "offline"),
+        "last_seen": device.get("last_seen", 0)
+    }
+
+@app.delete("/device/{device_id}/bind")
+async def unbind_device(device_id: str):
+    devices = await db.get("devices", {"device_id": device_id})
+    if devices:
+        await db.delete("device_bindings", {"device_id": devices[0]["id"]})
+    return {"ok": True}
+
+@app.post("/device/{device_id}/gateway/{path:path}")
+async def gateway_proxy(device_id: str, path: str, request: Request):
+    body = await request.body()
+    try:
+        data = json.loads(body) if body else {}
+    except:
+        data = {}
+    
+    try:
+        result = await manager.send_request(device_id, path, data)
+        return result
+    except HTTPException:
+        raise
 
 # ============== 微信登录 ==============
 WECHAT_APP_ID = os.getenv("WECHAT_APP_ID", "wxc6ee0aee83c794e7")
@@ -327,11 +332,8 @@ class WechatBindRequest(BaseModel):
 
 @app.post("/api/wechat/login")
 async def wechat_login(data: WechatLoginRequest):
-    """微信登录 - 通过 code 获取 openid"""
-    import httpx
-    
-    # 调用微信 API 获取 openid
-    url = f"https://api.weixin.qq.com/sns/jscode2session"
+    # 调用微信 API
+    url = "https://api.weixin.qq.com/sns/jscode2session"
     params = {
         "appid": WECHAT_APP_ID,
         "secret": WECHAT_APP_SECRET,
@@ -348,14 +350,17 @@ async def wechat_login(data: WechatLoginRequest):
                 openid = result["openid"]
                 session_key = result.get("session_key", "")
                 
-                # 检查用户是否已存在
-                user = store.get_user_by_openid(openid)
-                if not user:
-                    # 创建新用户
-                    user_id = f"wx_{openid[:16]}"
-                    store.create_user(user_id, {"openid": openid})
-                else:
+                # 查找或创建用户
+                users = await db.get("users", {"openid": openid})
+                if users and not isinstance(users, dict):
+                    user = users[0]
                     user_id = user["user_id"]
+                else:
+                    user_id = f"wx_{openid[:16]}"
+                    await db.post("users", {
+                        "user_id": user_id,
+                        "openid": openid
+                    })
                 
                 return {
                     "success": True,
@@ -366,37 +371,32 @@ async def wechat_login(data: WechatLoginRequest):
                     }
                 }
             else:
-                return {
-                    "success": False,
-                    "error": result.get("errmsg", "获取 openid 失败")
-                }
+                return {"success": False, "error": result.get("errmsg", "获取 openid 失败")}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
 @app.post("/api/wechat/bind-phone")
 async def wechat_bind_phone(data: WechatBindRequest):
-    """微信用户绑定手机号"""
-    # 验证码验证（这里简化为检查 6 位数字）
+    # 验证码验证
     if len(data.code) != 6 or not data.code.isdigit():
         return {"success": False, "error": "验证码错误"}
     
     # 查找用户
-    user = store.get_user_by_openid(data.openid)
-    if not user:
+    users = await db.get("users", {"openid": data.openid})
+    if not users:
         return {"success": False, "error": "用户不存在，请先登录"}
     
-    # 更新用户手机号
-    store.update_user(user["user_id"], {"phone": data.phone})
+    user = users[0]
+    await db.patch("users", {"openid": data.openid}, {"phone": data.phone})
     
     return {"success": True}
 
 @app.get("/api/wechat/user/{user_id}")
 async def get_wechat_user(user_id: str):
-    """获取微信用户信息"""
-    user = store.get_user(user_id)
-    if not user:
-        return {"error": "用户不存在"}, 404
-    
+    users = await db.get("users", {"user_id": user_id})
+    if not users:
+        return JSONResponse({"error": "用户不存在"}, status_code=404)
+    user = users[0]
     return {
         "user_id": user["user_id"],
         "openid": user.get("openid", ""),
@@ -405,80 +405,25 @@ async def get_wechat_user(user_id: str):
         "avatar": user.get("avatar", "")
     }
 
-# ============== 小程序端接口 ==============
-
-@app.get("/device/{device_id}/status")
-async def get_status(device_id: str):
-    """获取设备状态"""
-    device = store.get_device(device_id)
-    if not device:
-        return JSONResponse({"error": "device not found"}, status_code=404)
-    return {"ok": True, "device": get_device_view(device_id)}
-
-@app.get("/device/{device_id}")
-async def get_device(device_id: str):
-    """获取设备信息"""
-    device = store.get_device(device_id)
-    if not device:
-        return JSONResponse({"error": "device not found"}, status_code=404)
-    return get_device_view(device_id)
-
-@app.delete("/device/{device_id}/bind")
-async def unbind_device(device_id: str):
-    """解绑设备"""
-    store.unbind_device(device_id)
-    return {"ok": True}
-
-@app.post("/device/{device_id}/gateway/{path:path}")
-async def gateway_proxy(device_id: str, path: str, request: Request):
-    """网关代理 - 通过云端转发请求到设备"""
-    body = await request.body()
-    try:
-        data = json.loads(body) if body else {}
-    except:
-        data = {}
-    
-    # 从请求头获取覆盖值
-    gw_url = request.headers.get("X-Gw-Url")
-    gw_token = request.headers.get("X-Gw-Token")
-    
-    # 实际通过 WebSocket 转发到设备
-    try:
-        result = await manager.send_request(device_id, path, data)
-        return result
-    except HTTPException:
-        # 如果设备不在线，尝试 HTTP 代理（如果提供了 URL）
-        if gw_url:
-            import httpx
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(
-                    f"{gw_url}/{path}",
-                    json=data,
-                    headers={"Authorization": f"Bearer {gw_token}"} if gw_token else {}
-                )
-                return JSONResponse(resp.json(), status_code=resp.status_code)
-        raise
-
 # ============== 系统接口 ==============
 
 @app.get("/proxy/health")
 async def health():
-    """健康检查"""
     return {"ok": True, "status": "live", "ts": int(datetime.now().timestamp() * 1000)}
 
 @app.get("/proxy/metrics")
 async def metrics():
-    """系统指标"""
-    import psutil
-    return {
-        "cpu": psutil.cpu_percent(),
-        "mem": psutil.virtual_memory().percent,
-        "memUsedMB": psutil.virtual_memory().used / 1024 / 1024,
-        "memTotalMB": psutil.virtual_memory().total / 1024 / 1024,
-        "ts": int(datetime.now().timestamp() * 1000)
-    }
+    try:
+        import psutil
+        return {
+            "cpu": psutil.cpu_percent(),
+            "mem": psutil.virtual_memory().percent,
+            "ts": int(datetime.now().timestamp() * 1000)
+        }
+    except:
+        return {"cpu": 0, "mem": 0, "ts": int(datetime.now().timestamp() * 1000)}
 
-# ============== 静态文件服务 ==============
+# ============== 静态文件 ==============
 PUBLIC_DIR = Path("public")
 
 @app.get("/")
