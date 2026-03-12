@@ -54,6 +54,8 @@ class DeviceStore:
     def __init__(self):
         self.devices: Dict[str, dict] = {}
         self.bindings: Dict[str, str] = {}
+        self.users: Dict[str, dict] = {}  # user_id -> user data
+        self.openid_map: Dict[str, str] = {}  # openid -> user_id
         self.load()
     
     def load(self):
@@ -63,6 +65,9 @@ class DeviceStore:
                 data = json.loads(DB_FILE.read_text())
                 self.devices = data.get("devices", {})
                 self.bindings = data.get("bindings", {})
+                self.users = data.get("users", {})
+                # 重建 openid_map
+                self.openid_map = {v.get("openid", ""): k for k, v in self.users.items() if v.get("openid")}
             except Exception as e:
                 print(f"加载数据失败: {e}")
     
@@ -71,8 +76,9 @@ class DeviceStore:
         DB_FILE.parent.mkdir(parents=True, exist_ok=True)
         DB_FILE.write_text(json.dumps({
             "devices": self.devices,
-            "bindings": self.bindings
-        }, indent=2))
+            "bindings": self.bindings,
+            "users": self.users
+        }, indent=2, ensure_ascii=False))
     
     def get_device(self, device_id: str) -> Optional[dict]:
         return self.devices.get(device_id)
@@ -96,6 +102,34 @@ class DeviceStore:
     
     def get_user_id(self, device_id: str) -> Optional[str]:
         return self.bindings.get(device_id)
+    
+    # 用户管理
+    def get_user(self, user_id: str) -> Optional[dict]:
+        return self.users.get(user_id)
+    
+    def get_user_by_openid(self, openid: str) -> Optional[dict]:
+        user_id = self.openid_map.get(openid)
+        if user_id:
+            return self.users.get(user_id)
+        return None
+    
+    def create_user(self, user_id: str, data: dict):
+        self.users[user_id] = {
+            "user_id": user_id,
+            "openid": data.get("openid", ""),
+            "phone": "",
+            "nickname": "",
+            "avatar": "",
+            "created_at": int(datetime.now().timestamp() * 1000)
+        }
+        if data.get("openid"):
+            self.openid_map[data["openid"]] = user_id
+        self.save()
+    
+    def update_user(self, user_id: str, data: dict):
+        if user_id in self.users:
+            self.users[user_id].update(data)
+            self.save()
 
 store = DeviceStore()
 
@@ -278,6 +312,98 @@ async def heartbeat_legacy(data: HeartbeatRequest):
 @app.post("/device/bind")
 async def bind_legacy(data: BindRequest):
     return await bind(data)
+
+# ============== 微信登录 ==============
+WECHAT_APP_ID = os.getenv("WECHAT_APP_ID", "wxc6ee0aee83c794e7")
+WECHAT_APP_SECRET = os.getenv("WECHAT_APP_SECRET", "1264e0e7f7a90e65a92061355873bb37")
+
+class WechatLoginRequest(BaseModel):
+    code: str
+
+class WechatBindRequest(BaseModel):
+    openid: str
+    phone: str
+    code: str
+
+@app.post("/api/wechat/login")
+async def wechat_login(data: WechatLoginRequest):
+    """微信登录 - 通过 code 获取 openid"""
+    import httpx
+    
+    # 调用微信 API 获取 openid
+    url = f"https://api.weixin.qq.com/sns/jscode2session"
+    params = {
+        "appid": WECHAT_APP_ID,
+        "secret": WECHAT_APP_SECRET,
+        "js_code": data.code,
+        "grant_type": "authorization_code"
+    }
+    
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.get(url, params=params)
+            result = resp.json()
+            
+            if "openid" in result:
+                openid = result["openid"]
+                session_key = result.get("session_key", "")
+                
+                # 检查用户是否已存在
+                user = store.get_user_by_openid(openid)
+                if not user:
+                    # 创建新用户
+                    user_id = f"wx_{openid[:16]}"
+                    store.create_user(user_id, {"openid": openid})
+                else:
+                    user_id = user["user_id"]
+                
+                return {
+                    "success": True,
+                    "data": {
+                        "openid": openid,
+                        "user_id": user_id,
+                        "session_key": session_key
+                    }
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": result.get("errmsg", "获取 openid 失败")
+                }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+@app.post("/api/wechat/bind-phone")
+async def wechat_bind_phone(data: WechatBindRequest):
+    """微信用户绑定手机号"""
+    # 验证码验证（这里简化为检查 6 位数字）
+    if len(data.code) != 6 or not data.code.isdigit():
+        return {"success": False, "error": "验证码错误"}
+    
+    # 查找用户
+    user = store.get_user_by_openid(data.openid)
+    if not user:
+        return {"success": False, "error": "用户不存在，请先登录"}
+    
+    # 更新用户手机号
+    store.update_user(user["user_id"], {"phone": data.phone})
+    
+    return {"success": True}
+
+@app.get("/api/wechat/user/{user_id}")
+async def get_wechat_user(user_id: str):
+    """获取微信用户信息"""
+    user = store.get_user(user_id)
+    if not user:
+        return {"error": "用户不存在"}, 404
+    
+    return {
+        "user_id": user["user_id"],
+        "openid": user.get("openid", ""),
+        "phone": user.get("phone", ""),
+        "nickname": user.get("nickname", ""),
+        "avatar": user.get("avatar", "")
+    }
 
 # ============== 小程序端接口 ==============
 
