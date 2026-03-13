@@ -9,6 +9,7 @@ from fastapi import WebSocket
 
 logger = logging.getLogger("uvicorn.error")
 WS_REQUEST_TIMEOUT_SECONDS = float(os.getenv("WS_REQUEST_TIMEOUT_SECONDS", "60"))
+GATEWAY_TOKEN = os.getenv("GATEWAY_TOKEN", "39353e14566ccc5caf8f6d588366b27a81f005e28b81b68c")
 
 
 class ConnectionManager:
@@ -36,7 +37,19 @@ class ConnectionManager:
         
         websocket = self.active_connections[device_id]
         request_id = str(uuid.uuid4())
-        payload = {"request_id": request_id, "function": function, "params": params or {}}
+        request_params = dict(params or {})
+        # 兼容不同设备端协议：有的读取顶层 token，有的读取 params 内 token
+        if GATEWAY_TOKEN and "gateway_token" not in request_params:
+            request_params["gateway_token"] = GATEWAY_TOKEN
+        if GATEWAY_TOKEN and "token" not in request_params:
+            request_params["token"] = GATEWAY_TOKEN
+        payload = {
+            "request_id": request_id,
+            "function": function,
+            "params": request_params,
+            "gateway_token": GATEWAY_TOKEN,
+            "token": GATEWAY_TOKEN,
+        }
         logger.info(
             "[ws_manager] send request_id=%s device_id=%s function=%s payload_keys=%s timeout=%ss",
             request_id,
