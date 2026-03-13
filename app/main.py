@@ -1,18 +1,21 @@
 """FastAPI 应用入口"""
+import asyncio
 import json
+import uuid
 from pathlib import Path
-from fastapi import FastAPI
+from typing import Dict, Set
+from fastapi import FastAPI, WebSocket as FWS, WebSocketDisconnect
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime
 
-from app.config import PORT, SUPABASE_URL, SUPABASE_KEY
-from app.core.supabase import init_db
+from app.config import PORT, REDIS_HOST, REDIS_PORT, REDIS_DB
+from app.core.redis_db import init_redis
 from app.core.websocket import manager
 from api import device, wechat, proxy
 
 # 初始化
-init_db(SUPABASE_URL, SUPABASE_KEY)
+init_redis(REDIS_HOST, REDIS_PORT, REDIS_DB)
 
 # 创建应用
 app = FastAPI(title="PocketClaw Cloud Service")
@@ -31,22 +34,139 @@ app.include_router(device.router)
 app.include_router(wechat.router)
 app.include_router(proxy.router)
 
-# WebSocket
+# 流式客户端管理：device_id → set of client WebSockets
+stream_clients: Dict[str, Set[FWS]] = {}
+
+
+# 设备端反向代理 WebSocket
 @app.websocket("/proxy/{device_id}")
-async def proxy_websocket(websocket, device_id: str):
+async def proxy_websocket(websocket: FWS, device_id: str):
     await manager.connect(device_id, websocket)
     try:
         while True:
             data = await websocket.receive_text()
             try:
                 response = json.loads(data)
-                request_id = response.get("request_id")
-                if request_id:
-                    await manager.handle_response(request_id, response.get("data"))
-            except:
-                pass
+            except Exception:
+                continue
+
+            request_id = response.get("request_id")
+
+            # 流式事件：透传给订阅该设备的所有客户端
+            if "stream_event" in response:
+                clients = stream_clients.get(device_id, set())
+                msg = json.dumps({
+                    "type": "stream",
+                    "request_id": request_id,
+                    "event": response["stream_event"],
+                })
+                dead = []
+                for client_ws in clients:
+                    try:
+                        await client_ws.send_text(msg)
+                    except Exception:
+                        dead.append(client_ws)
+                for d in dead:
+                    clients.discard(d)
+                continue
+
+            # 普通 RPC 响应
+            if request_id:
+                # 也转发最终结果给流式客户端
+                resp_data = response.get("data", {})
+                if isinstance(resp_data, dict) and resp_data.get("done"):
+                    clients = stream_clients.get(device_id, set())
+                    msg = json.dumps({
+                        "type": "stream_end",
+                        "request_id": request_id,
+                        "data": resp_data,
+                    })
+                    dead = []
+                    for client_ws in clients:
+                        try:
+                            await client_ws.send_text(msg)
+                        except Exception:
+                            dead.append(client_ws)
+                    for d in dead:
+                        clients.discard(d)
+
+                await manager.handle_response(request_id, resp_data)
+    except WebSocketDisconnect:
+        pass
     except Exception:
+        pass
+    finally:
         manager.disconnect(device_id)
+
+
+# 客户端流式 WebSocket
+@app.websocket("/stream/{device_id}")
+async def stream_websocket(websocket: FWS, device_id: str):
+    """
+    小程序/客户端通过此端点接收实时流式事件。
+
+    客户端发送：
+      {"action": "chat", "message": "...", "sessionKey": "..."}
+
+    服务端推送：
+      {"type": "stream", "request_id": "...", "event": {"type": "text", "data": {"delta": "..."}}}
+      {"type": "stream_end", "request_id": "...", "data": {"content": "...", "done": true}}
+    """
+    await websocket.accept()
+
+    if device_id not in stream_clients:
+        stream_clients[device_id] = set()
+    stream_clients[device_id].add(websocket)
+
+    try:
+        while True:
+            raw = await websocket.receive_text()
+            try:
+                msg = json.loads(raw)
+            except Exception:
+                continue
+
+            action = msg.get("action")
+
+            if action == "chat":
+                message = msg.get("message", "")
+                session_key = msg.get("sessionKey", f"agent:main:stream-{uuid.uuid4().hex[:8]}")
+
+                if not manager.is_connected(device_id):
+                    await websocket.send_text(json.dumps({
+                        "type": "error",
+                        "error": "Device not connected",
+                    }))
+                    continue
+
+                try:
+                    result = await manager.send_request(
+                        device_id,
+                        "v1/chat/completions",
+                        {
+                            "messages": [{"role": "user", "content": message}],
+                            "sessionKey": session_key,
+                            "_stream": True,
+                        },
+                        method="POST",
+                        timeout=180.0,
+                    )
+                except Exception as e:
+                    await websocket.send_text(json.dumps({
+                        "type": "error",
+                        "error": str(e),
+                    }))
+            elif action == "ping":
+                await websocket.send_text(json.dumps({"type": "pong"}))
+
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        stream_clients.get(device_id, set()).discard(websocket)
+        if device_id in stream_clients and not stream_clients[device_id]:
+            del stream_clients[device_id]
 
 # 系统接口
 @app.get("/health")

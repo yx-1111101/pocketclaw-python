@@ -1,7 +1,7 @@
 """设备 API 路由"""
 from datetime import datetime
 from fastapi import APIRouter
-from app.core.supabase import get_db
+from app.core.redis_db import get_db
 from app.core.security import hash_sha256
 from app.models.schemas import HeartbeatRequest, BindRequest
 
@@ -71,7 +71,11 @@ async def bind(data: BindRequest):
         return JSONResponse({"error": "user not found"}, status_code=404)
     
     user = users[0]
-    await db.post("device_bindings", {"user_id": user["id"], "device_id": device["id"], "role": "owner"})
+
+    # 检查是否已绑定，避免重复绑定
+    existing_bindings = await db.get("device_bindings", {"device_id": device["id"], "user_id": user["id"]})
+    if not existing_bindings:
+        await db.post("device_bindings", {"user_id": user["id"], "device_id": device["id"], "role": "owner"})
     
     return {"success": True, "claimed": True, "message": "ok"}
 

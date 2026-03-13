@@ -4,7 +4,7 @@ import json
 import base64
 from Crypto.Cipher import AES
 from fastapi import APIRouter
-from app.core.supabase import get_db
+from app.core.redis_db import get_db
 from app.config import WECHAT_APP_ID, WECHAT_APP_SECRET
 from app.models.schemas import WechatLoginRequest, WechatBindPhoneRequest
 
