@@ -15,11 +15,21 @@ class SupabaseClient:
             "Content-Type": "application/json",
             "Prefer": "return=representation"
         }
+
+    @staticmethod
+    def _build_filter_params(filters: dict | None = None) -> dict:
+        params = {}
+        for key, value in (filters or {}).items():
+            if value is None:
+                params[key] = "is.null"
+            else:
+                params[key] = f"eq.{value}"
+        return params
     
     async def get(self, table: str, filters: dict = None) -> Any:
         """查询数据"""
         async with httpx.AsyncClient() as client:
-            params = filters or {}
+            params = self._build_filter_params(filters)
             resp = await client.get(
                 f"{self.url}/rest/v1/{table}",
                 headers=self.headers,
@@ -44,10 +54,11 @@ class SupabaseClient:
     async def patch(self, table: str, filters: dict, data: dict) -> Any:
         """更新数据"""
         async with httpx.AsyncClient() as client:
-            filter_str = ",".join([f"{k}=eq.{v}" for k, v in filters.items()])
+            params = self._build_filter_params(filters)
             resp = await client.patch(
-                f"{self.url}/rest/v1/{table}?{filter_str}",
+                f"{self.url}/rest/v1/{table}",
                 headers=self.headers,
+                params=params,
                 json=data
             )
             if resp.status_code >= 400:
@@ -57,10 +68,11 @@ class SupabaseClient:
     async def delete(self, table: str, filters: dict) -> Any:
         """删除数据"""
         async with httpx.AsyncClient() as client:
-            filter_str = ",".join([f"{k}=eq.{v}" for k, v in filters.items()])
+            params = self._build_filter_params(filters)
             resp = await client.delete(
-                f"{self.url}/rest/v1/{table}?{filter_str}",
-                headers=self.headers
+                f"{self.url}/rest/v1/{table}",
+                headers=self.headers,
+                params=params
             )
             if resp.status_code >= 400:
                 return {"error": resp.text}
