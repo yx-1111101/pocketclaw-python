@@ -18,8 +18,9 @@ class BindRequest(BaseModel):
 
 class WechatLoginRequest(BaseModel):
     code: str
+    encrypted_data: Optional[str] = None
+    iv: Optional[str] = None
 
 class WechatBindPhoneRequest(BaseModel):
     openid: str
-    phone: str
-    code: str
+    phone: Optional[str] = None
