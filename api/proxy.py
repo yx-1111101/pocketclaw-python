@@ -9,7 +9,7 @@ from app.core.security import parse_user_from_auth_header
 from app.core.supabase import get_db
 from app.core.websocket import manager
 
-router = APIRouter(prefix="/devices", tags=["网关"])
+router = APIRouter(prefix="/device", tags=["网关"])
 
 
 def is_online(device: dict) -> bool:
@@ -88,11 +88,14 @@ async def _require_user_device(db, request: Request, device_id: str):
 async def get_status(device_id: str, request: Request):
     db = get_db()
     _, device, _ = await _require_user_device(db, request, device_id)
+    device_id_str = device.get("device_id", "")
+    ws_online = manager.is_connected(device_id_str)
     return {
         "ok": True,
         "device": {
-            "device_id": device.get("device_id", ""),
-            "status": "online" if is_online(device) else device.get("status", "offline"),
+            "device_id": device_id_str,
+            "status": "online" if (is_online(device) or ws_online) else device.get("status", "offline"),
+            "ws_connected": ws_online,
             "last_seen": device.get("last_seen", 0),
         },
     }
@@ -102,11 +105,13 @@ async def get_status(device_id: str, request: Request):
 async def get_device(device_id: str, request: Request):
     db = get_db()
     _, device, _ = await _require_user_device(db, request, device_id)
+    device_id_str = device.get("device_id", "")
+    ws_online = manager.is_connected(device_id_str)
     return {
-        "device_id": device.get("device_id", ""),
+        "device_id": device_id_str,
         "name": device.get("name", "我的盒子"),
         "public_url": device.get("public_url", ""),
-        "status": "online" if is_online(device) else device.get("status", "offline"),
+        "status": "online" if (is_online(device) or ws_online) else device.get("status", "offline"),
         "last_seen": device.get("last_seen", 0),
     }
 
@@ -125,20 +130,53 @@ async def unbind_device(device_id: str, request: Request):
 async def get_device_metrics(device_id: str, request: Request):
     db = get_db()
     await _require_user_device(db, request, device_id)
+    if manager.is_connected(device_id):
+        try:
+            result = await manager.send_request(
+                device_id, "setup/api/services", method="GET", timeout=10.0,
+            )
+            return result.get("data", {"cpu": 0, "memory": 0, "uptime": 0})
+        except Exception:
+            pass
     return {"cpu": 0, "memory": 0, "uptime": 0}
 
 
-@router.post("/{device_id}/gateway/{path:path}")
-async def gateway_proxy(device_id: str, path: str, request: Request):
+async def _gateway_proxy_impl(device_id: str, path: str, request: Request):
+    """通用网关代理：支持 GET/POST/PUT/DELETE，将 HTTP method 透传给设备端。"""
     db = get_db()
     await _require_user_device(db, request, device_id)
-
+    method = request.method
     body = await request.body()
     try:
         data = json.loads(body) if body else {}
     except Exception:
         data = {}
+
+    query_params = dict(request.query_params) if request.query_params else None
+
     try:
-        return await manager.send_request(device_id, path, data)
+        result = await manager.send_request(
+            device_id, path, data,
+            method=method,
+            query=query_params,
+        )
+        return result
     except HTTPException:
         raise
+
+
+@router.get("/{device_id}/gateway/{path:path}")
+async def gateway_proxy_get(device_id: str, path: str, request: Request):
+    return await _gateway_proxy_impl(device_id, path, request)
+
+@router.post("/{device_id}/gateway/{path:path}")
+async def gateway_proxy_post(device_id: str, path: str, request: Request):
+    return await _gateway_proxy_impl(device_id, path, request)
+
+@router.put("/{device_id}/gateway/{path:path}")
+async def gateway_proxy_put(device_id: str, path: str, request: Request):
+    return await _gateway_proxy_impl(device_id, path, request)
+
+@router.delete("/{device_id}/gateway/{path:path}")
+async def gateway_proxy_delete(device_id: str, path: str, request: Request):
+    return await _gateway_proxy_impl(device_id, path, request)

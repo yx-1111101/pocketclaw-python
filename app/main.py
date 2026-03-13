@@ -1,10 +1,13 @@
 """FastAPI 应用入口"""
+import asyncio
 import json
 import logging
 import time
 import uuid
 from pathlib import Path
+from typing import Dict, Set
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import WebSocket as FWS
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime, timezone
@@ -15,7 +18,7 @@ from app.core.supabase import get_db, init_db
 from app.core.websocket import manager
 from api import device, wechat, proxy, cron, skills, sessions
 
-# 初始化
+# 初始化 Supabase（持久化存储）
 init_db(SUPABASE_URL, SUPABASE_KEY)
 logger = logging.getLogger("uvicorn.error")
 
@@ -140,8 +143,11 @@ async def upsert_device_presence(device_id: str):
         logger.info("[ws_presence] insert ok device_id=%s", device_id)
 
 
-# WebSocket
-@app.websocket("/stream/{device_id}")
+# 流式客户端管理：device_id → set of client WebSockets
+stream_clients: Dict[str, Set[FWS]] = {}
+
+
+# 设备端反向代理 WebSocket
 @app.websocket("/proxy/{device_id}")
 async def proxy_websocket(websocket: WebSocket, device_id: str):
     client_ip = websocket.client.host if websocket.client else "-"
@@ -153,23 +159,132 @@ async def proxy_websocket(websocket: WebSocket, device_id: str):
             data = await websocket.receive_text()
             try:
                 response = json.loads(data)
-                request_id = response.get("request_id")
-                if request_id:
-                    await manager.handle_response(request_id, response.get("data"))
-                else:
-                    logger.info(
-                        "[ws_proxy] message without request_id device_id=%s keys=%s",
-                        device_id,
-                        list(response.keys()) if isinstance(response, dict) else [],
-                    )
             except Exception:
                 logger.warning("[ws_proxy] message parse failed device_id=%s raw=%s", device_id, data[:300])
+                continue
+
+            request_id = response.get("request_id")
+
+            # 流式事件：透传给订阅该设备的所有客户端
+            if "stream_event" in response:
+                clients = stream_clients.get(device_id, set())
+                msg = json.dumps({
+                    "type": "stream",
+                    "request_id": request_id,
+                    "event": response["stream_event"],
+                })
+                dead = []
+                for client_ws in clients:
+                    try:
+                        await client_ws.send_text(msg)
+                    except Exception:
+                        dead.append(client_ws)
+                for d in dead:
+                    clients.discard(d)
+                continue
+
+            # 普通 RPC 响应
+            if request_id:
+                resp_data = response.get("data", {})
+                # 推理完成时也通知流式客户端
+                if isinstance(resp_data, dict) and resp_data.get("done"):
+                    clients = stream_clients.get(device_id, set())
+                    msg = json.dumps({
+                        "type": "stream_end",
+                        "request_id": request_id,
+                        "data": resp_data,
+                    })
+                    dead = []
+                    for client_ws in clients:
+                        try:
+                            await client_ws.send_text(msg)
+                        except Exception:
+                            dead.append(client_ws)
+                    for d in dead:
+                        clients.discard(d)
+                await manager.handle_response(request_id, resp_data)
+            else:
+                logger.info(
+                    "[ws_proxy] message without request_id device_id=%s keys=%s",
+                    device_id,
+                    list(response.keys()) if isinstance(response, dict) else [],
+                )
     except WebSocketDisconnect:
         logger.info("[ws_proxy] disconnect ip=%s device_id=%s", client_ip, device_id)
-        manager.disconnect(device_id)
     except Exception:
         logger.exception("[ws_proxy] error ip=%s device_id=%s", client_ip, device_id)
+    finally:
         manager.disconnect(device_id)
+
+
+# 客户端流式 WebSocket
+@app.websocket("/stream/{device_id}")
+async def stream_websocket(websocket: FWS, device_id: str):
+    """
+    小程序/客户端通过此端点接收实时流式事件。
+
+    客户端发送：
+      {"action": "chat", "message": "...", "sessionKey": "..."}
+
+    服务端推送：
+      {"type": "stream", "request_id": "...", "event": {"type": "text", "data": {"delta": "..."}}}
+      {"type": "stream_end", "request_id": "...", "data": {"content": "...", "done": true}}
+    """
+    await websocket.accept()
+
+    if device_id not in stream_clients:
+        stream_clients[device_id] = set()
+    stream_clients[device_id].add(websocket)
+
+    try:
+        while True:
+            raw = await websocket.receive_text()
+            try:
+                msg = json.loads(raw)
+            except Exception:
+                continue
+
+            action = msg.get("action")
+
+            if action == "chat":
+                message = msg.get("message", "")
+                session_key = msg.get("sessionKey", f"agent:main:stream-{uuid.uuid4().hex[:8]}")
+
+                if not manager.is_connected(device_id):
+                    await websocket.send_text(json.dumps({
+                        "type": "error",
+                        "error": "Device not connected",
+                    }))
+                    continue
+
+                try:
+                    result = await manager.send_request(
+                        device_id,
+                        "v1/chat/completions",
+                        {
+                            "messages": [{"role": "user", "content": message}],
+                            "sessionKey": session_key,
+                            "_stream": True,
+                        },
+                        method="POST",
+                        timeout=180.0,
+                    )
+                except Exception as e:
+                    await websocket.send_text(json.dumps({
+                        "type": "error",
+                        "error": str(e),
+                    }))
+            elif action == "ping":
+                await websocket.send_text(json.dumps({"type": "pong"}))
+
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        stream_clients.get(device_id, set()).discard(websocket)
+        if device_id in stream_clients and not stream_clients[device_id]:
+            del stream_clients[device_id]
 
 # 系统接口
 @app.get("/health")

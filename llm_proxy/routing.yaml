@@ -1,0 +1,108 @@
+# LLM Proxy Routing Configuration
+#
+# providers:     define all available LLM providers (OpenAI-compatible endpoints)
+# model_routing: map model names to a specific provider + optional overrides
+# default:       fallback provider/model when the request doesn't match any rule
+
+# ── Default ───────────────────────────────────────────────────────────────────
+# Used when the requested model has no explicit entry in model_routing,
+# or when the client does not specify a provider.
+default:
+  provider: zhizengzeng
+
+# ── Providers ─────────────────────────────────────────────────────────────────
+# Each provider must have a name, base_url, and api_key (or api_key_env).
+# format: openai   → standard Bearer-token OpenAI-compatible endpoint
+providers:
+  - name: zhizengzeng
+    base_url: https://api.zhizengzeng.com/v1
+    api_key_env: ZHIZENGZENG_API_KEY        # override via env var
+    api_key: sk-zk24e880cf60d89ae4cbb7ef06a1d72af7769b222ed0cad5
+    format: openai
+
+  # Example: add more providers here
+  # - name: openai
+  #   base_url: https://api.openai.com/v1
+  #   api_key_env: OPENAI_API_KEY
+  #   format: openai
+  #
+  # - name: zhipu
+  #   base_url: https://open.bigmodel.cn/api/paas/v4
+  #   api_key_env: ZHIPU_API_KEY
+  #   format: openai
+
+# ── Model routing ─────────────────────────────────────────────────────────────
+# Each entry maps a model name (as sent by the client) to:
+#   provider:    which provider to use  (must exist in providers list)
+#   model:       model name to forward  (can differ from the incoming name)
+#   temperature: optional default temperature override
+#   max_tokens:  optional default max_tokens override
+#   timeout:     optional per-model HTTP timeout in seconds
+#
+# If a model is not listed here, the `default` provider/model is used.
+model_routing:
+  # ── zhizengzeng models ────────────────────────────────────────────────────
+  gpt-4o:
+    provider: zhizengzeng
+    model: gpt-4o
+    timeout: 120
+
+  gpt-4o-mini:
+    provider: zhizengzeng
+    model: gpt-4o-mini
+    timeout: 60
+
+  gpt-4.1:
+    provider: zhizengzeng
+    model: gpt-4.1
+    timeout: 120
+
+  gpt-4.1-mini:
+    provider: zhizengzeng
+    model: gpt-4.1-mini
+    timeout: 60
+
+  gpt-4.1-nano:
+    provider: zhizengzeng
+    model: gpt-4.1-nano
+    timeout: 60
+
+  o3:
+    provider: zhizengzeng
+    model: o3
+    timeout: 300
+
+  o4-mini:
+    provider: zhizengzeng
+    model: o4-mini
+    timeout: 180
+
+  claude-sonnet-4-5:
+    provider: zhizengzeng
+    model: claude-sonnet-4-5
+    timeout: 120
+
+  claude-opus-4-5:
+    provider: zhizengzeng
+    model: claude-opus-4-5
+    timeout: 180
+
+  deepseek-chat:
+    provider: zhizengzeng
+    model: deepseek-chat
+    timeout: 120
+
+  deepseek-reasoner:
+    provider: zhizengzeng
+    model: deepseek-reasoner
+    timeout: 300
+
+  gemini-2.0-flash:
+    provider: zhizengzeng
+    model: gemini-2.0-flash
+    timeout: 60
+
+  gemini-2.5-pro:
+    provider: zhizengzeng
+    model: gemini-2.5-pro
+    timeout: 180
