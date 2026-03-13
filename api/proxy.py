@@ -4,7 +4,7 @@ import json
 from app.core.supabase import get_db
 from app.core.websocket import manager
 
-router = APIRouter(prefix="/device", tags=["网关"])
+router = APIRouter(prefix="/devices", tags=["网关"])
 
 def is_online(device: dict) -> bool:
     from datetime import datetime

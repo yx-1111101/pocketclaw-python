@@ -5,7 +5,7 @@ from app.core.supabase import get_db
 from app.core.security import hash_sha256
 from app.models.schemas import HeartbeatRequest, BindRequest
 
-router = APIRouter(prefix="", tags=["设备"])
+router = APIRouter(prefix="/devices", tags=["设备"])
 
 def is_online(device: dict) -> bool:
     if not device:
@@ -15,7 +15,7 @@ def is_online(device: dict) -> bool:
         return False
     return datetime.now().timestamp() * 1000 - last_seen < 5 * 60 * 1000
 
-@router.post("/v1/device/heartbeat")
+@router.post("/heartbeat")
 async def heartbeat(data: HeartbeatRequest):
     db = get_db()
     devices = await db.get("devices", {"device_id": data.device_id})
@@ -49,7 +49,7 @@ async def heartbeat(data: HeartbeatRequest):
     
     return {"success": True, "claimed": claimed, "message": "ok"}
 
-@router.post("/v1/device/bind")
+@router.post("/bind")
 async def bind(data: BindRequest):
     db = get_db()
     devices = await db.get("devices", {"device_id": data.device_id})
@@ -75,10 +75,3 @@ async def bind(data: BindRequest):
     
     return {"success": True, "claimed": True, "message": "ok"}
 
-@router.post("/device/heartbeat")
-async def heartbeat_legacy(data: HeartbeatRequest):
-    return await heartbeat(data)
-
-@router.post("/device/bind")
-async def bind_legacy(data: BindRequest):
-    return await bind(data)

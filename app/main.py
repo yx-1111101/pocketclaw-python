@@ -49,11 +49,11 @@ async def proxy_websocket(websocket, device_id: str):
         manager.disconnect(device_id)
 
 # 系统接口
-@app.get("/proxy/health")
+@app.get("/health")
 async def health():
     return {"ok": True, "status": "live", "ts": int(datetime.now().timestamp() * 1000)}
 
-@app.get("/proxy/metrics")
+@app.get("/metrics")
 async def metrics():
     try:
         import psutil

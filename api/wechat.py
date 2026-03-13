@@ -5,7 +5,7 @@ from app.core.supabase import get_db
 from app.config import WECHAT_APP_ID, WECHAT_APP_SECRET
 from app.models.schemas import WechatLoginRequest, WechatBindPhoneRequest
 
-router = APIRouter(prefix="/api/wechat", tags=["微信"])
+router = APIRouter(prefix="/api/auth", tags=["微信"])
 
 @router.post("/login")
 async def wechat_login(data: WechatLoginRequest):
