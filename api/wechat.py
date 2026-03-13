@@ -109,16 +109,31 @@ async def wechat_login(data: WechatLoginRequest):
             phone = ""
 
             db = get_db()
-            if db_is_ready(db):
-                try:
-                    existing = await fetch_single_user(db, {"openid": openid})
-                    if existing:
-                        user_id = existing.get("user_id") or user_id
-                        phone = normalize_phone(existing.get("phone", ""))
-                except ValueError:
-                    return {"success": False, "error": "该微信账号存在重复用户，请联系管理员"}
-                except Exception as e:
-                    return {"success": False, "error": f"查询用户失败: {e}"}
+            if not db_is_ready(db):
+                return {"success": False, "error": "数据库未配置，无法完成微信登录"}
+
+            try:
+                existing = await fetch_single_user(db, {"openid": openid})
+                if existing:
+                    user_id = existing.get("user_id") or user_id
+                    phone = normalize_phone(existing.get("phone", ""))
+                    if not existing.get("user_id"):
+                        await patch_user(db, {"openid": openid}, {"user_id": user_id})
+                else:
+                    created = await insert_user(
+                        db,
+                        {
+                            "user_id": user_id,
+                            "openid": openid,
+                            "phone": "",
+                        },
+                    )
+                    user_id = created.get("user_id", user_id)
+                    phone = normalize_phone(created.get("phone", ""))
+            except ValueError:
+                return {"success": False, "error": "该微信账号存在重复用户，请联系管理员"}
+            except Exception as e:
+                return {"success": False, "error": f"微信登录数据库操作失败: {e}"}
 
             return {
                 "success": True,
