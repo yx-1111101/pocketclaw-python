@@ -7,6 +7,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from app.config import WECHAT_APP_ID, WECHAT_APP_SECRET
+from app.core.security import make_auth_token
 from app.core.sms import check_code, send_verification_code, verify_code
 from app.core.supabase import get_db
 
@@ -142,6 +143,7 @@ async def wechat_login(data: WechatLoginRequest):
                     "user_id": user_id,
                     "phone": phone,
                     "need_bind_phone": not is_valid_phone(phone),
+                    "token": make_auth_token(user_id),
                 }
             }
     except Exception as e:
@@ -202,6 +204,7 @@ async def phone_login(data: PhoneLoginRequest):
                 "openid": user.get("openid", ""),
                 "phone": phone,
                 "need_bind_phone": False,
+                "token": make_auth_token(user.get("user_id", "")),
             },
         }
     except ValueError:
@@ -268,6 +271,7 @@ async def bind_phone(data: BindPhoneRequest):
             "user_id": user_id,
             "phone": phone,
             "need_bind_phone": False,
+            "token": make_auth_token(user_id),
         },
     }
 
