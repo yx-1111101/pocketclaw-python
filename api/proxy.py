@@ -1,6 +1,6 @@
 """网关代理 API 路由"""
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -15,10 +15,33 @@ router = APIRouter(prefix="/devices", tags=["网关"])
 def is_online(device: dict) -> bool:
     if not device:
         return False
-    last_seen = device.get("last_seen")
-    if not last_seen:
+    last_seen_ms = _to_epoch_ms(device.get("last_seen"))
+    if not last_seen_ms:
         return False
-    return datetime.now().timestamp() * 1000 - last_seen < 5 * 60 * 1000
+    return datetime.now(timezone.utc).timestamp() * 1000 - last_seen_ms < 5 * 60 * 1000
+
+
+def _to_epoch_ms(value) -> int:
+    if value is None:
+        return 0
+    if isinstance(value, (int, float)):
+        num = float(value)
+        if num <= 0:
+            return 0
+        return int(num if num > 10_000_000_000 else num * 1000)
+    text = str(value).strip()
+    if not text:
+        return 0
+    try:
+        num = float(text)
+        return int(num if num > 10_000_000_000 else num * 1000)
+    except Exception:
+        pass
+    try:
+        normalized = text.replace("Z", "+00:00")
+        return int(datetime.fromisoformat(normalized).timestamp() * 1000)
+    except Exception:
+        return 0
 
 
 def _require_token_user_id(request: Request) -> str:

@@ -1,5 +1,5 @@
 """设备 API 路由"""
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -14,10 +14,34 @@ router = APIRouter(prefix="/devices", tags=["设备"])
 def is_online(device: dict) -> bool:
     if not device:
         return False
-    last_seen = device.get("last_seen")
-    if not last_seen:
+    last_seen_ms = _to_epoch_ms(device.get("last_seen"))
+    if not last_seen_ms:
         return False
-    return datetime.now().timestamp() * 1000 - last_seen < 5 * 60 * 1000
+    return datetime.now(timezone.utc).timestamp() * 1000 - last_seen_ms < 5 * 60 * 1000
+
+
+def _to_epoch_ms(value) -> int:
+    if value is None:
+        return 0
+    if isinstance(value, (int, float)):
+        num = float(value)
+        if num <= 0:
+            return 0
+        # 兼容秒/毫秒两种数值时间戳
+        return int(num if num > 10_000_000_000 else num * 1000)
+    text = str(value).strip()
+    if not text:
+        return 0
+    try:
+        num = float(text)
+        return int(num if num > 10_000_000_000 else num * 1000)
+    except Exception:
+        pass
+    try:
+        normalized = text.replace("Z", "+00:00")
+        return int(datetime.fromisoformat(normalized).timestamp() * 1000)
+    except Exception:
+        return 0
 
 
 def normalize_device(device: dict = None) -> dict:
@@ -98,10 +122,12 @@ async def heartbeat(data: HeartbeatRequest):
     devices = await db.get("devices", {"device_id": data.device_id})
     existing = devices[0] if devices and not isinstance(devices, dict) else None
 
+    now = datetime.now(timezone.utc)
     update_data = {
         "status": "online",
-        "last_seen": int(datetime.now().timestamp() * 1000),
-        "updated_at": datetime.now().isoformat(),
+        # 数据库中 last_seen 为 timestamptz，必须写 ISO 时间字符串
+        "last_seen": now.isoformat(),
+        "updated_at": now.isoformat(),
     }
 
     if data.public_url:
@@ -111,15 +137,19 @@ async def heartbeat(data: HeartbeatRequest):
     if data.pairing_code_hash is not None:
         update_data["pairing_code_hash"] = data.pairing_code_hash
     if data.pairing_code_expires is not None:
-        update_data["pairing_code_expires"] = datetime.fromtimestamp(data.pairing_code_expires).isoformat()
+        update_data["pairing_code_expires"] = datetime.fromtimestamp(data.pairing_code_expires, timezone.utc).isoformat()
     if data.device_secret_hash:
         update_data["device_secret_hash"] = data.device_secret_hash
 
     if existing:
-        await db.patch("devices", {"device_id": data.device_id}, update_data)
+        patched = await db.patch("devices", {"device_id": data.device_id}, update_data)
+        if isinstance(patched, dict) and patched.get("error"):
+            return JSONResponse({"success": False, "error": f"设备心跳更新失败: {patched['error']}"}, status_code=500)
     else:
         update_data["device_id"] = data.device_id
-        await db.post("devices", update_data)
+        created = await db.post("devices", update_data)
+        if isinstance(created, dict) and created.get("error"):
+            return JSONResponse({"success": False, "error": f"设备心跳写入失败: {created['error']}"}, status_code=500)
 
     bindings = await db.get("device_bindings", {"device_id": existing["id"]}) if existing else []
     claimed = bool(bindings and len(bindings) > 0)
