@@ -37,16 +37,6 @@ async def _fetch_single(db, table: str, filters: dict):
     return rows[0]
 
 
-async def _find_device_by_identity(db, identity: str):
-    key = str(identity or "").strip()
-    if not key:
-        return None
-    device = await _fetch_single(db, "devices", {"device_id": key})
-    if device:
-        return device
-    return await _fetch_single(db, "devices", {"box_id": key})
-
-
 async def _require_user(db, request: Request):
     user_id = _require_token_user_id(request)
     user = await _fetch_single(db, "users", {"user_id": user_id})
@@ -57,7 +47,7 @@ async def _require_user(db, request: Request):
 
 async def _require_user_device(db, request: Request, device_id: str):
     user = await _require_user(db, request)
-    device = await _find_device_by_identity(db, device_id)
+    device = await _fetch_single(db, "devices", {"device_id": device_id})
     if not device:
         raise HTTPException(status_code=404, detail="device not found")
 
@@ -75,11 +65,10 @@ async def _require_user_device(db, request: Request, device_id: str):
 async def get_status(device_id: str, request: Request):
     db = get_db()
     _, device, _ = await _require_user_device(db, request, device_id)
-    identity = device.get("device_id") or device.get("box_id") or ""
     return {
         "ok": True,
         "device": {
-            "device_id": identity,
+            "device_id": device.get("device_id", ""),
             "status": "online" if is_online(device) else device.get("status", "offline"),
             "last_seen": device.get("last_seen", 0),
         },
@@ -90,9 +79,8 @@ async def get_status(device_id: str, request: Request):
 async def get_device(device_id: str, request: Request):
     db = get_db()
     _, device, _ = await _require_user_device(db, request, device_id)
-    identity = device.get("device_id") or device.get("box_id") or ""
     return {
-        "device_id": identity,
+        "device_id": device.get("device_id", ""),
         "name": device.get("name", "我的盒子"),
         "public_url": device.get("public_url", ""),
         "status": "online" if is_online(device) else device.get("status", "offline"),

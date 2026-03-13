@@ -22,9 +22,8 @@ def is_online(device: dict) -> bool:
 
 def normalize_device(device: dict = None) -> dict:
     payload = device or {}
-    identity = payload.get("device_id") or payload.get("box_id") or ""
     return {
-        "device_id": identity,
+        "device_id": payload.get("device_id", ""),
         "name": payload.get("name", "我的盒子"),
         "public_url": payload.get("public_url", ""),
         "status": "online" if is_online(payload) else payload.get("status", "offline"),
@@ -46,16 +45,6 @@ async def _fetch_single(db, table: str, filters: dict):
     if not rows or isinstance(rows, dict):
         return None
     return rows[0]
-
-
-async def _find_device_by_identity(db, identity: str):
-    key = str(identity or "").strip()
-    if not key:
-        return None
-    device = await _fetch_single(db, "devices", {"device_id": key})
-    if device:
-        return device
-    return await _fetch_single(db, "devices", {"box_id": key})
 
 
 async def _require_auth_user(db, request: Request) -> dict:
@@ -143,7 +132,7 @@ async def bind(data: BindRequest, request: Request):
     db = get_db()
     owner = await _require_auth_user(db, request)
 
-    device = await _find_device_by_identity(db, data.device_id)
+    device = await _fetch_single(db, "devices", {"device_id": data.device_id})
     if not device:
         return JSONResponse({"error": "device not found"}, status_code=404)
 

@@ -153,14 +153,14 @@
 
 **请求 Header**
 ```
-x-device-id: box-a1b2c3d4
+x-device-id: ocl-a1b2c3d4
 x-gw-token: <gateway_token>
 ```
 
 **请求**
 ```json
 {
-  "device_id": "box-a1b2c3d4",
+  "device_id": "ocl-a1b2c3d4",
   "status": "online",
   "ip": "192.168.1.100"
 }
@@ -179,9 +179,8 @@ x-gw-token: <gateway_token>
 **请求**
 ```json
 {
-  "device_id": "box-a1b2c3d4",
-  "user_id": "wx_oLcdw3...",
-  "token": "<gateway_token>"
+  "device_id": "ocl-a1b2c3d4",
+  "pairing_code": "123456"
 }
 ```
 
@@ -190,7 +189,7 @@ x-gw-token: <gateway_token>
 {
   "success": true,
   "device": {
-    "box_id": "box-a1b2c3d4",
+    "device_id": "ocl-a1b2c3d4",
     "status": "online",
     "name": "My PocketClaw"
   }
@@ -205,7 +204,7 @@ x-gw-token: <gateway_token>
 **响应**
 ```json
 {
-  "device_id": "box-a1b2c3d4",
+  "device_id": "ocl-a1b2c3d4",
   "status": "online",
   "last_seen": 1234567890
 }
@@ -233,12 +232,12 @@ x-gw-token: <gateway_token>
 
 **示例：聊天**
 ```
-POST /devices/box-a1b2c3d4/gateway/v1/chat/completions
+POST /devices/ocl-a1b2c3d4/gateway/v1/chat/completions
 ```
 
 **请求 Header**
 ```
-x-user-id: wx_oLcdw3...
+Authorization: Bearer <auth_token>
 ```
 
 **请求**：OpenAI 兼容格式
