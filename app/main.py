@@ -14,7 +14,7 @@ from api import device, wechat, proxy
 
 # 初始化
 init_db(SUPABASE_URL, SUPABASE_KEY)
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("uvicorn.error")
 
 # 创建应用
 app = FastAPI(title="PocketClaw Cloud Service")
@@ -36,6 +36,7 @@ app.include_router(proxy.router)
 
 async def upsert_device_presence(device_id: str):
     """在设备建立 WS 连接时确保 devices 里存在该 device_id。"""
+    logger.info("[ws_presence] start device_id=%s", device_id)
     db = get_db()
     now = datetime.now(timezone.utc).isoformat()
     payload = {
@@ -45,23 +46,29 @@ async def upsert_device_presence(device_id: str):
     }
     rows = await db.get("devices", {"device_id": device_id})
     if isinstance(rows, dict) and rows.get("error"):
-        logger.error("查询设备失败: %s", rows["error"])
+        logger.error("[ws_presence] query failed device_id=%s error=%s", device_id, rows["error"])
         return
 
     if rows and not isinstance(rows, dict):
         patched = await db.patch("devices", {"device_id": device_id}, payload)
         if isinstance(patched, dict) and patched.get("error"):
-            logger.error("更新设备在线状态失败: %s", patched["error"])
+            logger.error("[ws_presence] patch failed device_id=%s error=%s", device_id, patched["error"])
+        else:
+            logger.info("[ws_presence] patch ok device_id=%s", device_id)
         return
 
     created = await db.post("devices", {"device_id": device_id, **payload})
     if isinstance(created, dict) and created.get("error"):
-        logger.error("创建设备记录失败: %s", created["error"])
+        logger.error("[ws_presence] insert failed device_id=%s error=%s", device_id, created["error"])
+    else:
+        logger.info("[ws_presence] insert ok device_id=%s", device_id)
 
 
 # WebSocket
 @app.websocket("/proxy/{device_id}")
 async def proxy_websocket(websocket: WebSocket, device_id: str):
+    client_ip = websocket.client.host if websocket.client else "-"
+    logger.info("[ws_proxy] connect ip=%s device_id=%s", client_ip, device_id)
     await manager.connect(device_id, websocket)
     await upsert_device_presence(device_id)
     try:
@@ -72,11 +79,13 @@ async def proxy_websocket(websocket: WebSocket, device_id: str):
                 request_id = response.get("request_id")
                 if request_id:
                     await manager.handle_response(request_id, response.get("data"))
-            except:
+            except Exception:
                 pass
     except WebSocketDisconnect:
+        logger.info("[ws_proxy] disconnect ip=%s device_id=%s", client_ip, device_id)
         manager.disconnect(device_id)
     except Exception:
+        logger.exception("[ws_proxy] error ip=%s device_id=%s", client_ip, device_id)
         manager.disconnect(device_id)
 
 # 系统接口
