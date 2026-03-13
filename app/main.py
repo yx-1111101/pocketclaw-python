@@ -1,6 +1,8 @@
 """FastAPI 应用入口"""
 import json
 import logging
+import time
+import uuid
 from pathlib import Path
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, FileResponse
@@ -33,6 +35,76 @@ app.add_middleware(
 app.include_router(device.router)
 app.include_router(wechat.router)
 app.include_router(proxy.router)
+
+
+def _truncate_text(text: str, limit: int = 2000) -> str:
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}...(truncated {len(text) - limit} chars)"
+
+
+def _normalize_payload(raw: bytes) -> str:
+    if not raw:
+        return ""
+    try:
+        text = raw.decode("utf-8", errors="replace")
+    except Exception:
+        return "<binary>"
+    return _truncate_text(text)
+
+
+@app.middleware("http")
+async def log_http_io(request: Request, call_next):
+    path = request.url.path
+    if not (path.startswith("/devices") or path.startswith("/api/auth")):
+        return await call_next(request)
+
+    request_id = uuid.uuid4().hex[:8]
+    client_ip = request.client.host if request.client else "-"
+    started_at = time.perf_counter()
+    body = await request.body()
+
+    async def receive():
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    wrapped_request = Request(request.scope, receive)
+    req_payload = _normalize_payload(body)
+    auth = request.headers.get("Authorization", "")
+
+    logger.info(
+        "[http_io][%s] IN %s %s ip=%s query=%s auth=%s body=%s",
+        request_id,
+        request.method,
+        path,
+        client_ip,
+        request.url.query or "",
+        auth or "-",
+        req_payload or "-",
+    )
+
+    try:
+        response = await call_next(wrapped_request)
+    except Exception:
+        logger.exception("[http_io][%s] EX %s %s ip=%s", request_id, request.method, path, client_ip)
+        raise
+
+    cost_ms = int((time.perf_counter() - started_at) * 1000)
+    resp_body = getattr(response, "body", b"")
+    if isinstance(resp_body, bytes):
+        resp_payload = _normalize_payload(resp_body)
+    else:
+        resp_payload = _truncate_text(str(resp_body))
+
+    logger.info(
+        "[http_io][%s] OUT %s %s status=%s cost=%sms body=%s",
+        request_id,
+        request.method,
+        path,
+        response.status_code,
+        cost_ms,
+        resp_payload or "<streaming or empty>",
+    )
+    return response
 
 
 async def upsert_device_presence(device_id: str):
