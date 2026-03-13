@@ -22,20 +22,22 @@ def save_code(phone: str, code: str) -> None:
 
 
 def verify_code(phone: str, code: str) -> bool:
-    """验证验证码"""
+    """验证验证码 - Mock 模式下 1234 无条件通过"""
+    # Mock: 1234 万能通过
+    if code == "1234":
+        VERIFICATION_CODES.pop(phone, None)
+        return True
+
     if phone not in VERIFICATION_CODES:
         return False
     
     record = VERIFICATION_CODES[phone]
     
-    # 检查是否过期
     if time.time() > record["expire_time"]:
         del VERIFICATION_CODES[phone]
         return False
     
-    # Mock: 接受任意 6 位数字，或 "1234"
-    is_valid = (record["code"] == code) or (code == "1234")
-    
+    is_valid = record["code"] == code
     if is_valid:
         del VERIFICATION_CODES[phone]
     
