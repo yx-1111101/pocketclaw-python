@@ -45,26 +45,23 @@ async def wechat_login(data: WechatLoginRequest):
             user_id = f"wx_{openid[:16]}"
             phone = ""
 
+            # 尝试从数据库读取（Supabase 未配置时跳过）
             db = get_db()
-            users = await db.get("users", {"openid": openid})
-            if isinstance(users, dict) and users.get("error"):
-                return {"success": False, "error": "查询用户失败"}
-
-            existing = users[0] if users and not isinstance(users, dict) else None
-            if existing:
-                user_id = existing.get("user_id") or user_id
-                phone = existing.get("phone") or ""
-            else:
-                created = await db.post(
-                    "users",
-                    {
-                        "user_id": user_id,
-                        "openid": openid,
-                        "phone": "",
-                    },
-                )
-                if isinstance(created, dict) and created.get("error"):
-                    return {"success": False, "error": "创建用户失败"}
+            if db and db.url:
+                try:
+                    users = await db.get("users", {"openid": openid})
+                    existing = users[0] if users and not isinstance(users, dict) else None
+                    if existing:
+                        user_id = existing.get("user_id") or user_id
+                        phone = existing.get("phone") or ""
+                    else:
+                        await db.post("users", {
+                            "user_id": user_id,
+                            "openid": openid,
+                            "phone": "",
+                        })
+                except Exception:
+                    pass  # 数据库操作失败不影响登录
             
             return {
                 "success": True,
