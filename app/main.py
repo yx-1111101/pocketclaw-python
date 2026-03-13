@@ -65,6 +65,7 @@ async def upsert_device_presence(device_id: str):
 
 
 # WebSocket
+@app.websocket("/stream/{device_id}")
 @app.websocket("/proxy/{device_id}")
 async def proxy_websocket(websocket: WebSocket, device_id: str):
     client_ip = websocket.client.host if websocket.client else "-"
