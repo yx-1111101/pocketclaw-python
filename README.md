@@ -121,7 +121,20 @@ Content-Type: application/json
 
 {
   "openid": "微信openid",
-  "phone": "13800138000"
+  "phone": "13800138000",
+  "code": "1234"
+}
+```
+
+#### 手机号登录
+
+```http
+POST /api/auth/phone-login
+Content-Type: application/json
+
+{
+  "phone": "13800138000",
+  "code": "1234"
 }
 ```
 

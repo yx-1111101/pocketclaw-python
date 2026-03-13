@@ -21,26 +21,28 @@ def save_code(phone: str, code: str) -> None:
     }
 
 
-def verify_code(phone: str, code: str) -> bool:
-    """验证验证码 - Mock 模式下 1234 无条件通过"""
+def check_code(phone: str, code: str) -> bool:
+    """校验验证码（不消费）"""
     # Mock: 1234 万能通过
     if code == "1234":
-        VERIFICATION_CODES.pop(phone, None)
         return True
 
     if phone not in VERIFICATION_CODES:
         return False
-    
+
     record = VERIFICATION_CODES[phone]
-    
     if time.time() > record["expire_time"]:
         del VERIFICATION_CODES[phone]
         return False
-    
-    is_valid = record["code"] == code
+
+    return record["code"] == code
+
+
+def verify_code(phone: str, code: str) -> bool:
+    """验证验证码（消费一次）"""
+    is_valid = check_code(phone, code)
     if is_valid:
-        del VERIFICATION_CODES[phone]
-    
+        VERIFICATION_CODES.pop(phone, None)
     return is_valid
 
 

@@ -44,7 +44,36 @@ Content-Type: application/json
 
 ---
 
-### 2. 绑定手机号
+### 2. 手机号登录
+
+手机号验证码登录（Mock），验证通过后自动查找或创建用户。
+
+```http
+POST /api/auth/phone-login
+Content-Type: application/json
+
+{
+  "phone": "13800138000",
+  "code": "1234"
+}
+```
+
+**响应**:
+```json
+{
+  "success": true,
+  "data": {
+    "user_id": "ph_xxx",
+    "openid": "",
+    "phone": "13800138000",
+    "need_bind_phone": false
+  }
+}
+```
+
+---
+
+### 3. 绑定手机号
 
 微信用户绑定手机号。
 
@@ -54,7 +83,8 @@ Content-Type: application/json
 
 {
   "openid": "微信openid",
-  "phone": "13800138000"
+  "phone": "13800138000",
+  "code": "1234"
 }
 ```
 
@@ -67,7 +97,7 @@ Content-Type: application/json
 
 ---
 
-### 3. 获取用户信息
+### 4. 获取用户信息
 
 获取用户详情。
 
