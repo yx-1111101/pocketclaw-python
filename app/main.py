@@ -2,12 +2,13 @@
 import json
 import logging
 from pathlib import Path
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime, timezone
 
 from app.config import PORT, SUPABASE_URL, SUPABASE_KEY
+from app.core.security import parse_user_from_auth_header
 from app.core.supabase import get_db, init_db
 from app.core.websocket import manager
 from api import device, wechat, proxy
@@ -101,6 +102,43 @@ async def metrics():
         return {"cpu": psutil.cpu_percent(), "mem": psutil.virtual_memory().percent, "ts": int(datetime.now().timestamp() * 1000)}
     except:
         return {"cpu": 0, "mem": 0, "ts": int(datetime.now().timestamp() * 1000)}
+
+
+@app.get("/debug/ws-connections")
+async def debug_ws_connections(request: Request, device_id: str = ""):
+    """调试接口：查看当前内存中的 WebSocket 在线设备。"""
+    user_id, err = parse_user_from_auth_header(request.headers.get("Authorization", ""))
+    if err:
+        return JSONResponse({"success": False, "error": err}, status_code=401)
+
+    items = []
+    for did, ws in manager.active_connections.items():
+        client_ip = "-"
+        try:
+            client_ip = ws.client.host if ws.client else "-"
+        except Exception:
+            pass
+        items.append({"device_id": did, "client_ip": client_ip})
+
+    items.sort(key=lambda item: item["device_id"])
+    target = str(device_id or "").strip()
+    if target:
+        matched = [item for item in items if item["device_id"] == target]
+        return {
+            "success": True,
+            "viewer_user_id": user_id,
+            "total": len(items),
+            "device_id": target,
+            "connected": bool(matched),
+            "connections": matched,
+        }
+
+    return {
+        "success": True,
+        "viewer_user_id": user_id,
+        "total": len(items),
+        "connections": items,
+    }
 
 # 静态文件
 PUBLIC_DIR = Path("public")
