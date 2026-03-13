@@ -1,18 +1,20 @@
 """FastAPI 应用入口"""
 import json
+import logging
 from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.config import PORT, SUPABASE_URL, SUPABASE_KEY
-from app.core.supabase import init_db
+from app.core.supabase import get_db, init_db
 from app.core.websocket import manager
 from api import device, wechat, proxy
 
 # 初始化
 init_db(SUPABASE_URL, SUPABASE_KEY)
+logger = logging.getLogger(__name__)
 
 # 创建应用
 app = FastAPI(title="PocketClaw Cloud Service")
@@ -31,10 +33,37 @@ app.include_router(device.router)
 app.include_router(wechat.router)
 app.include_router(proxy.router)
 
+
+async def upsert_device_presence(device_id: str):
+    """在设备建立 WS 连接时确保 devices 里存在该 device_id。"""
+    db = get_db()
+    now = datetime.now(timezone.utc).isoformat()
+    payload = {
+        "status": "online",
+        "last_seen": now,
+        "updated_at": now,
+    }
+    rows = await db.get("devices", {"device_id": device_id})
+    if isinstance(rows, dict) and rows.get("error"):
+        logger.error("查询设备失败: %s", rows["error"])
+        return
+
+    if rows and not isinstance(rows, dict):
+        patched = await db.patch("devices", {"device_id": device_id}, payload)
+        if isinstance(patched, dict) and patched.get("error"):
+            logger.error("更新设备在线状态失败: %s", patched["error"])
+        return
+
+    created = await db.post("devices", {"device_id": device_id, **payload})
+    if isinstance(created, dict) and created.get("error"):
+        logger.error("创建设备记录失败: %s", created["error"])
+
+
 # WebSocket
 @app.websocket("/proxy/{device_id}")
 async def proxy_websocket(websocket: WebSocket, device_id: str):
     await manager.connect(device_id, websocket)
+    await upsert_device_presence(device_id)
     try:
         while True:
             data = await websocket.receive_text()
