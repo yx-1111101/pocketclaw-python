@@ -1,41 +1,96 @@
-# PocketClaw Cloud Service API 文档
+# API 文档
 
-**基础地址**: `http://43.160.215.122:8764`
-
----
-
-## 目录
-
-1. [小程序端接口](#小程序端接口) - 小程序调用
-2. [设备端接口](#设备端接口) - 设备调用
-3. [系统接口](#系统接口)
+**Base URL**: `http://43.160.215.122:8764`
 
 ---
 
-## 小程序端接口
+## 健康检查
 
-### 1. 微信登录
-
-通过微信 code 获取用户信息。
-
-```http
-POST /api/auth/login
-Content-Type: application/json
-
-{
-  "code": "微信wx.login返回的code",
-  "encrypted_data": "可选：getPhoneNumber返回的encryptedData",
-  "iv": "可选：getPhoneNumber返回的iv"
-}
+### GET /health
+```json
+{ "ok": true, "status": "live", "ts": 1234567890 }
 ```
 
-**响应**:
+### GET /metrics
+```json
+{ "cpu": 0, "mem": 0, "ts": 1234567890 }
+```
+
+---
+
+## 认证 `/api/auth`
+
+### POST /api/auth/login
+微信登录，通过 wx.login() 获取的 code 换取 openid。
+
+**请求**
+```json
+{ "code": "wx_code_from_login" }
+```
+
+**响应**
 ```json
 {
   "success": true,
   "data": {
-    "openid": "微信openid",
-    "user_id": "wx_xxx",
+    "openid": "oLcdw3...",
+    "user_id": "wx_oLcdw3...",
+    "phone": "",
+    "need_bind_phone": true
+  }
+}
+```
+
+---
+
+### POST /api/auth/send-code
+发送短信验证码（当前为 Mock 模式，不实际发送）。
+
+**请求**
+```json
+{ "phone": "13800138000" }
+```
+
+**响应**
+```json
+{ "success": true, "message": "验证码已发送（Mock模式）" }
+```
+
+---
+
+### POST /api/auth/verify-code
+校验验证码（不消费，仅验证）。
+
+**请求**
+```json
+{ "phone": "13800138000", "code": "1234" }
+```
+
+**响应**
+```json
+{ "success": true, "message": "验证成功" }
+```
+
+> **Mock 模式**：验证码 `1234` 万能通过，无需先调用 send-code。
+
+---
+
+### POST /api/auth/phone-login
+手机号 + 验证码登录（验证码通过后自动查找/创建用户）。
+
+**请求**
+```json
+{ "phone": "13800138000", "code": "1234" }
+```
+
+**响应**
+```json
+{
+  "success": true,
+  "message": "登录成功",
+  "data": {
+    "user_id": "ph_abc123...",
+    "openid": "",
     "phone": "13800138000",
     "need_bind_phone": false
   }
@@ -44,86 +99,113 @@ Content-Type: application/json
 
 ---
 
-### 2. 绑定手机号
+### POST /api/auth/bind-phone
+微信用户绑定手机号（需验证码）。
 
-微信用户绑定手机号。
-
-```http
-POST /api/auth/bind-phone
-Content-Type: application/json
-
-{
-  "openid": "微信openid",
-  "phone": "13800138000"
-}
-```
-
-**响应**:
+**请求**
 ```json
 {
-  "success": true
-}
-```
-
----
-
-### 3. 获取用户信息
-
-获取用户详情。
-
-```http
-GET /api/auth/user/{user_id}
-```
-
-**响应**:
-```json
-{
-  "user_id": "wx_xxx",
-  "openid": "xxx",
+  "openid": "oLcdw3...",
   "phone": "13800138000",
-  "nickname": "",
-  "avatar": ""
+  "code": "1234"
 }
 ```
 
----
-
-### 4. 获取设备状态
-
-查询设备在线状态。
-
-```http
-GET /devices/{device_id}/status
-```
-
-**响应**:
+**响应**
 ```json
 {
-  "ok": true,
-  "device": {
-    "device_id": "ocl-xxx",
-    "status": "online",
-    "last_seen": 1234567890
+  "success": true,
+  "message": "绑定成功",
+  "data": {
+    "openid": "oLcdw3...",
+    "user_id": "wx_oLcdw3...",
+    "phone": "13800138000",
+    "need_bind_phone": false
   }
 }
 ```
 
 ---
 
-### 5. 获取设备信息
+### GET /api/auth/user/{user_id}
+获取用户信息。
 
-获取设备完整信息。
-
-```http
-GET /devices/{device_id}
-```
-
-**响应**:
+**响应**
 ```json
 {
-  "device_id": "ocl-xxx",
-  "name": "我的盒子",
-  "public_url": "https://xxx.trycloudflare.com",
+  "success": true,
+  "data": {
+    "user_id": "wx_oLcdw3...",
+    "openid": "oLcdw3...",
+    "phone": "13800138000",
+    "nickname": "",
+    "avatar": ""
+  }
+}
+```
+
+---
+
+## 设备 `/devices`
+
+### POST /devices/heartbeat
+设备心跳上报（设备端调用）。
+
+**请求 Header**
+```
+x-device-id: box-a1b2c3d4
+x-gw-token: <gateway_token>
+```
+
+**请求**
+```json
+{
+  "device_id": "box-a1b2c3d4",
+  "status": "online",
+  "ip": "192.168.1.100"
+}
+```
+
+**响应**
+```json
+{ "ok": true }
+```
+
+---
+
+### POST /devices/bind
+小程序绑定设备。
+
+**请求**
+```json
+{
+  "device_id": "box-a1b2c3d4",
+  "user_id": "wx_oLcdw3...",
+  "token": "<gateway_token>"
+}
+```
+
+**响应**
+```json
+{
+  "success": true,
+  "device": {
+    "box_id": "box-a1b2c3d4",
+    "status": "online",
+    "name": "My PocketClaw"
+  }
+}
+```
+
+---
+
+### GET /devices/{device_id}/status
+查询设备状态。
+
+**响应**
+```json
+{
+  "device_id": "box-a1b2c3d4",
   "status": "online",
   "last_seen": 1234567890
 }
@@ -131,178 +213,65 @@ GET /devices/{device_id}
 
 ---
 
-### 6. 获取设备指标
+### GET /devices/{device_id}
+获取设备详情。
 
-获取设备性能指标。
+---
 
-```http
-GET /devices/{device_id}/metrics
+### GET /devices/{device_id}/metrics
+获取设备指标（CPU、内存等）。
+
+---
+
+### DELETE /devices/{device_id}/bind
+解绑设备。
+
+---
+
+### POST /devices/{device_id}/gateway/{path}
+代理转发到设备本地 Gateway（小程序无法直接访问设备，通过此接口中转）。
+
+**示例：聊天**
+```
+POST /devices/box-a1b2c3d4/gateway/v1/chat/completions
 ```
 
-**响应**:
+**请求 Header**
+```
+x-user-id: wx_oLcdw3...
+```
+
+**请求**：OpenAI 兼容格式
 ```json
 {
-  "cpu": 45,
-  "memory": 72,
-  "uptime": 3600
+  "model": "default",
+  "messages": [{ "role": "user", "content": "你好" }],
+  "stream": false
 }
+```
+
+**响应**：透传设备 Gateway 的响应。
+
+---
+
+## 错误格式
+
+```json
+{ "success": false, "error": "错误描述" }
 ```
 
 ---
 
-### 7. 绑定设备
+## 登录流程
 
-将设备绑定到当前用户账号。
-
-```http
-POST /devices/bind
-Content-Type: application/json
-
-{
-  "device_id": "ocl-xxx",
-  "user_id": "wx-xxx",
-  "pairing_code": "123456"
-}
 ```
+方式一（微信登录）:
+  wx.login() → /api/auth/login (code)
+    → 返回 openid + user_id
+    → 如果 need_bind_phone=true → /api/auth/send-code → /api/auth/bind-phone
 
-**响应**:
-```json
-{
-  "success": true,
-  "claimed": true,
-  "message": "ok"
-}
+方式二（手机号登录）:
+  /api/auth/send-code (phone)
+    → /api/auth/phone-login (phone + code)
+    → 返回 user_id
 ```
-
----
-
-### 8. 解绑设备
-
-解除设备与用户的绑定。
-
-```http
-DELETE /devices/{device_id}/bind
-```
-
-**响应**:
-```json
-{
-  "ok": true
-}
-```
-
----
-
-### 9. 网关代理
-
-通过云端转发请求到设备。
-
-```http
-POST /devices/{device_id}/gateway/{path}
-Content-Type: application/json
-
-{
-  "message": "hello"
-}
-```
-
-**请求头**:
-| 头字段 | 说明 |
-|--------|------|
-| X-Gw-Url | 覆盖设备 URL |
-| X-Gw-Token | 覆盖认证 Token |
-
-**示例**:
-```bash
-curl -X POST http://43.160.215.122:8764/devices/ocl-xxx/gateway/api/chat \
-  -H "Content-Type: application/json" \
-  -d '{"message":"hello"}'
-```
-
----
-
-## 设备端接口
-
-### 10. 设备心跳
-
-设备联网后上报心跳。
-
-```http
-POST /devices/heartbeat
-Content-Type: application/json
-
-{
-  "device_id": "ocl-xxx",
-  "public_url": "https://xxx.trycloudflare.com",
-  "pairing_code_hash": "sha256...",
-  "pairing_code_expires": 1741594200,
-  "firmware_version": "1.0.0",
-  "device_secret_hash": "sha256..."
-}
-```
-
-**响应**:
-```json
-{
-  "success": true,
-  "claimed": false,
-  "message": "ok"
-}
-```
-
----
-
-## 系统接口
-
-### 11. 健康检查
-
-系统健康状态。
-
-```http
-GET /health
-```
-
-**响应**:
-```json
-{
-  "ok": true,
-  "status": "live",
-  "ts": 1234567890
-}
-```
-
----
-
-### 12. 系统指标
-
-服务器性能指标。
-
-```http
-GET /metrics
-```
-
-**响应**:
-```json
-{
-  "cpu": 45,
-  "mem": 72,
-  "ts": 1234567890
-}
-```
-
----
-
-## 错误响应格式
-
-```json
-{
-  "error": "错误描述"
-}
-```
-
-| 状态码 | 说明 |
-|--------|------|
-| 400 | 参数错误 |
-| 403 | 权限不足 / 配对码不匹配 |
-| 404 | 资源不存在 |
-| 504 | 请求超时 |

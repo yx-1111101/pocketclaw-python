@@ -14,7 +14,7 @@ class HeartbeatRequest(BaseModel):
 
 class BindRequest(BaseModel):
     device_id: str
-    user_id: str
+    user_id: Optional[str] = None
     pairing_code: Optional[str] = None
 
 class WechatLoginRequest(BaseModel):
