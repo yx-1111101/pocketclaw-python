@@ -2,12 +2,14 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from llm_proxy.config import REDIS_HOST, REDIS_PORT, REDIS_DB, PORT
-from llm_proxy.redis_db import init_db
+from llm_proxy.config import SUPABASE_URL, SUPABASE_KEY, REDIS_HOST, REDIS_PORT, REDIS_DB, PORT
+from llm_proxy.redis_db import init_cache
+from llm_proxy.supabase_client import init_supabase
 from llm_proxy.providers import init_providers
 from llm_proxy.router import router
 
-init_db(REDIS_HOST, REDIS_PORT, REDIS_DB)
+init_supabase(SUPABASE_URL, SUPABASE_KEY)
+init_cache(REDIS_HOST, REDIS_PORT, REDIS_DB)
 init_providers()
 
 app = FastAPI(title="LLM Proxy Service")
