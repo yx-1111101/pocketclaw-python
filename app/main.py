@@ -153,8 +153,14 @@ async def proxy_websocket(websocket: WebSocket, device_id: str):
                 request_id = response.get("request_id")
                 if request_id:
                     await manager.handle_response(request_id, response.get("data"))
+                else:
+                    logger.info(
+                        "[ws_proxy] message without request_id device_id=%s keys=%s",
+                        device_id,
+                        list(response.keys()) if isinstance(response, dict) else [],
+                    )
             except Exception:
-                pass
+                logger.warning("[ws_proxy] message parse failed device_id=%s raw=%s", device_id, data[:300])
     except WebSocketDisconnect:
         logger.info("[ws_proxy] disconnect ip=%s device_id=%s", client_ip, device_id)
         manager.disconnect(device_id)
