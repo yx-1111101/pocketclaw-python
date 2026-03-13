@@ -4,7 +4,6 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from app.core.redis_cache import cache_set
 from app.core.security import hash_sha256, parse_user_from_auth_header
 from app.core.supabase import get_db
 from app.models.schemas import BindRequest, HeartbeatRequest
@@ -126,9 +125,6 @@ async def heartbeat(data: HeartbeatRequest):
         update_data["pairing_code_expires"] = datetime.fromtimestamp(data.pairing_code_expires).isoformat()
     if data.device_secret_hash:
         update_data["device_secret_hash"] = data.device_secret_hash
-    # 明文 device_secret 缓存到 Redis，供 HMAC 验签使用，不持久化到 Supabase
-    if data.device_secret:
-        await cache_set(f"device_secret:{data.device_id}", data.device_secret)
 
     if existing:
         await db.patch("devices", {"device_id": data.device_id}, update_data)

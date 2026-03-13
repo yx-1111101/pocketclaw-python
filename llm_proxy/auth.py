@@ -17,54 +17,31 @@ class DeviceAuth:
         device_id: str,
         timestamp: int,
         signature: str,
-        device_secret: str
+        device_secret_hash: str,
     ) -> bool:
         """
-        验证设备签名
+        验证设备签名。
 
-        Args:
-            device_id: 设备 ID
-            timestamp: Unix 时间戳（秒）
-            signature: 客户端提供的签名
-            device_secret: 设备密钥明文（云端首次注册时存储）
-
-        Returns:
-            签名是否有效
+        设备签名时用 SHA-256(device_secret) 的原始字节作为 HMAC key，
+        云端存储的 device_secret_hash 即为该值的十六进制表示，
+        因此云端可直接用 bytes.fromhex(device_secret_hash) 完成验签，
+        无需持有明文 secret。
         """
-        # 检查时间戳是否在容差范围内
         current_time = int(time.time())
         if abs(current_time - timestamp) > DeviceAuth.TIMESTAMP_TOLERANCE:
             return False
 
+        key = bytes.fromhex(device_secret_hash)
         message = f"{device_id}:{timestamp}"
-        expected_signature = hmac.new(
-            device_secret.encode('utf-8'),
-            message.encode('utf-8'),
-            hashlib.sha256
-        ).hexdigest()
-
-        # 使用常量时间比较防止时序攻击
-        return hmac.compare_digest(signature, expected_signature)
+        expected = hmac.new(key, message.encode("utf-8"), hashlib.sha256).hexdigest()
+        return hmac.compare_digest(signature, expected)
 
     @staticmethod
     def generate_signature(device_id: str, timestamp: int, device_secret: str) -> str:
-        """
-        生成签名（用于测试）
-
-        Args:
-            device_id: 设备 ID
-            timestamp: Unix 时间戳（秒）
-            device_secret: 设备密钥明文
-
-        Returns:
-            HMAC-SHA256 签名
-        """
+        """生成签名（测试用）。key = SHA-256(device_secret).digest()"""
+        key = hashlib.sha256(device_secret.encode("utf-8")).digest()
         message = f"{device_id}:{timestamp}"
-        return hmac.new(
-            device_secret.encode('utf-8'),
-            message.encode('utf-8'),
-            hashlib.sha256
-        ).hexdigest()
+        return hmac.new(key, message.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 async def verify_device_auth(

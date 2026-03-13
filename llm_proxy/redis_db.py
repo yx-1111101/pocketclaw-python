@@ -1,68 +1,36 @@
-"""轻量 Redis 客户端 — llm_proxy 内部自用，不依赖 app/"""
+"""Redis cache for llm_proxy — device row cache only."""
 import json
-from typing import Any, Optional
+from typing import Optional
 
 import redis.asyncio as aioredis
 
+_redis: Optional[aioredis.Redis] = None
 
-class RedisClient:
-    def __init__(self, host: str, port: int, db: int):
-        self._r = aioredis.Redis(host=host, port=port, db=db, decode_responses=True)
-
-    async def get(self, table: str, filters: dict = None):
-        if not filters:
-            keys = []
-            async for key in self._r.scan_iter(f"{table}:row:*"):
-                keys.append(key)
-            rows = []
-            for key in keys:
-                row = await self._r.hgetall(key)
-                if row:
-                    rows.append(_deserialize(row))
-            return rows
-
-        results = []
-        for field, value in filters.items():
-            idx_key = f"{table}:index:{field}:{value}"
-            row_ids = await self._r.smembers(idx_key)
-            for row_id in row_ids:
-                row = await self._r.hgetall(f"{table}:row:{row_id}")
-                if row:
-                    d = _deserialize(row)
-                    if all(str(d.get(k)) == str(v) for k, v in filters.items()):
-                        results.append(d)
-        return results
+DEVICE_CACHE_TTL = 60  # seconds
 
 
-def _deserialize(row: dict) -> dict:
-    result = {}
-    for k, v in row.items():
-        if v == "":
-            result[k] = None
-        else:
-            try:
-                parsed = json.loads(v)
-                if isinstance(parsed, (dict, list)):
-                    result[k] = parsed
-                    continue
-            except (json.JSONDecodeError, TypeError):
-                pass
-            try:
-                result[k] = int(v)
-                continue
-            except ValueError:
-                pass
-            result[k] = v
-    return result
+def init_cache(host: str = "localhost", port: int = 6379, db: int = 0) -> None:
+    global _redis
+    _redis = aioredis.Redis(host=host, port=port, db=db, decode_responses=True)
+    print(f"[llm_proxy] Redis cache ready ({host}:{port}/{db})")
 
 
-_db = None
+async def get_device(device_id: str) -> Optional[dict]:
+    if _redis is None:
+        return None
+    raw = await _redis.get(f"llm_proxy:device:{device_id}")
+    if raw is None:
+        return None
+    return json.loads(raw)
 
 
-def init_db(host: str, port: int, db: int) -> None:
-    global _db
-    _db = RedisClient(host, port, db)
+async def set_device(device_id: str, device: dict) -> None:
+    if _redis is None:
+        return
+    await _redis.set(f"llm_proxy:device:{device_id}", json.dumps(device), ex=DEVICE_CACHE_TTL)
 
 
-def get_db():
-    return _db
+async def invalidate_device(device_id: str) -> None:
+    if _redis is None:
+        return
+    await _redis.delete(f"llm_proxy:device:{device_id}")
