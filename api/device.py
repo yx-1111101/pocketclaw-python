@@ -37,6 +37,9 @@ async def heartbeat(data: HeartbeatRequest):
         update_data["pairing_code_expires"] = datetime.fromtimestamp(data.pairing_code_expires).isoformat()
     if data.device_secret_hash:
         update_data["device_secret_hash"] = data.device_secret_hash
+    # 首次注册时存储明文 secret，供后续 HMAC 验签使用
+    if data.device_secret:
+        update_data["device_secret"] = data.device_secret
     
     if existing:
         await db.patch("devices", {"device_id": data.device_id}, update_data)

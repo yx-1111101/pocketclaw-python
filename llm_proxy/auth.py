@@ -26,7 +26,7 @@ class DeviceAuth:
             device_id: 设备 ID
             timestamp: Unix 时间戳（秒）
             signature: 客户端提供的签名
-            device_secret: 设备密钥（明文）
+            device_secret: 设备密钥明文（云端首次注册时存储）
 
         Returns:
             签名是否有效
@@ -36,7 +36,6 @@ class DeviceAuth:
         if abs(current_time - timestamp) > DeviceAuth.TIMESTAMP_TOLERANCE:
             return False
 
-        # 计算期望的签名
         message = f"{device_id}:{timestamp}"
         expected_signature = hmac.new(
             device_secret.encode('utf-8'),
@@ -55,7 +54,7 @@ class DeviceAuth:
         Args:
             device_id: 设备 ID
             timestamp: Unix 时间戳（秒）
-            device_secret: 设备密钥
+            device_secret: 设备密钥明文
 
         Returns:
             HMAC-SHA256 签名

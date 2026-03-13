@@ -61,7 +61,7 @@ async def chat_completions(
     if not device_secret:
         raise HTTPException(
             status_code=401,
-            detail="Device secret not configured. Please complete device setup."
+            detail="Device secret not registered. Please send a heartbeat first to complete device setup.",
         )
 
     if not DeviceAuth.verify_signature(device_id, timestamp, signature, device_secret):
