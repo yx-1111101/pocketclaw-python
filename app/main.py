@@ -1,7 +1,7 @@
 """FastAPI 应用入口"""
 import json
 from pathlib import Path
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime
@@ -33,7 +33,7 @@ app.include_router(proxy.router)
 
 # WebSocket
 @app.websocket("/proxy/{device_id}")
-async def proxy_websocket(websocket, device_id: str):
+async def proxy_websocket(websocket: WebSocket, device_id: str):
     await manager.connect(device_id, websocket)
     try:
         while True:
@@ -45,6 +45,8 @@ async def proxy_websocket(websocket, device_id: str):
                     await manager.handle_response(request_id, response.get("data"))
             except:
                 pass
+    except WebSocketDisconnect:
+        manager.disconnect(device_id)
     except Exception:
         manager.disconnect(device_id)
 
