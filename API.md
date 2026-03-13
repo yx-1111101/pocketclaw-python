@@ -6,13 +6,14 @@
 
 ## 目录
 
-1. [设备 API](#设备-api)
-2. [认证 API](#认证-api)
-3. [系统接口](#系统接口)
+1. [设备端接口](#设备端接口)
+2. [小程序端接口](#小程序端接口)
+3. [微信登录接口](#微信登录接口)
+4. [系统接口](#系统接口)
 
 ---
 
-## 设备 API
+## 设备端接口
 
 ### 1. 设备心跳
 
@@ -23,7 +24,7 @@
 **请求体**:
 ```json
 {
-  "device_id": "box-a1b2c3d4",
+  "device_id": "ocl-xxx",
   "public_url": "https://xxx.trycloudflare.com",
   "pairing_code_hash": "sha256...",
   "pairing_code_expires": 1741594200,
@@ -52,8 +53,8 @@
 **请求体**:
 ```json
 {
-  "device_id": "box-a1b2c3d4",
-  "user_id": "user-xxx",
+  "device_id": "ocl-xxx",
+  "user_id": "wx-xxx",
   "pairing_code": "123456"
 }
 ```
@@ -69,6 +70,8 @@
 
 ---
 
+## 小程序端接口
+
 ### 3. 获取设备状态
 
 查询设备在线状态。
@@ -80,7 +83,7 @@
 {
   "ok": true,
   "device": {
-    "device_id": "box-a1b2c3d4",
+    "device_id": "ocl-xxx",
     "status": "online",
     "last_seen": 1234567890
   }
@@ -98,7 +101,7 @@
 **响应**:
 ```json
 {
-  "device_id": "box-a1b2c3d4",
+  "device_id": "ocl-xxx",
   "name": "我的盒子",
   "public_url": "https://xxx.trycloudflare.com",
   "status": "online",
@@ -154,14 +157,14 @@
 
 **示例**:
 ```bash
-curl -X POST http://43.160.215.122:8764/devices/box-a1b2c3d4/gateway/api/chat \
+curl -X POST http://43.160.215.122:8764/devices/ocl-xxx/gateway/api/chat \
   -H "Content-Type: application/json" \
   -d '{"message":"hello"}'
 ```
 
 ---
 
-## 认证 API
+## 微信登录接口
 
 ### 8. 微信登录
 
@@ -176,24 +179,15 @@ curl -X POST http://43.160.215.122:8764/devices/box-a1b2c3d4/gateway/api/chat \
 }
 ```
 
-**响应 (用户已存在)**:
+**响应**:
 ```json
 {
   "success": true,
   "data": {
     "openid": "xxx",
-    "user_id": "user_xxx",
-    "token": "jwt-token"
+    "user_id": "wx_xxx",
+    "session_key": "xxx"
   }
-}
-```
-
-**响应 (用户不存在)**:
-```json
-{
-  "success": true,
-  "need_bind_phone": true,
-  "openid": "xxx"
 }
 ```
 
@@ -217,28 +211,22 @@ curl -X POST http://43.160.215.122:8764/devices/box-a1b2c3d4/gateway/api/chat \
 **响应**:
 ```json
 {
-  "success": true,
-  "token": "jwt-token"
+  "success": true
 }
 ```
 
 ---
 
-### 10. 获取当前用户
+### 10. 获取用户信息
 
-获取当前登录用户信息。
+获取微信用户信息。
 
-**接口**: `GET /api/auth/me`
-
-**请求头**:
-```
-Authorization: Bearer <token>
-```
+**接口**: `GET /api/auth/user/{user_id}`
 
 **响应**:
 ```json
 {
-  "user_id": "user_xxx",
+  "user_id": "wx_xxx",
   "openid": "xxx",
   "phone": "13800138000",
   "nickname": "",
