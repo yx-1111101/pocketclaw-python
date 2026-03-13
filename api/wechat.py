@@ -4,6 +4,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 from app.config import WECHAT_APP_ID, WECHAT_APP_SECRET
 from app.core.sms import send_verification_code, verify_code
+from app.core.supabase import get_db
 
 router = APIRouter(prefix="/api/auth", tags=["认证"])
 
@@ -14,6 +15,10 @@ class WechatLoginRequest(BaseModel):
     code: str
     encrypted_data: str = None
     iv: str = None
+
+def is_valid_phone(phone: str = "") -> bool:
+    value = str(phone or "").strip()
+    return len(value) == 11 and value.startswith("1") and value.isdigit()
 
 
 @router.post("/login")
@@ -38,12 +43,36 @@ async def wechat_login(data: WechatLoginRequest):
             
             openid = result["openid"]
             user_id = f"wx_{openid[:16]}"
+            phone = ""
+
+            db = get_db()
+            users = await db.get("users", {"openid": openid})
+            if isinstance(users, dict) and users.get("error"):
+                return {"success": False, "error": "查询用户失败"}
+
+            existing = users[0] if users and not isinstance(users, dict) else None
+            if existing:
+                user_id = existing.get("user_id") or user_id
+                phone = existing.get("phone") or ""
+            else:
+                created = await db.post(
+                    "users",
+                    {
+                        "user_id": user_id,
+                        "openid": openid,
+                        "phone": "",
+                    },
+                )
+                if isinstance(created, dict) and created.get("error"):
+                    return {"success": False, "error": "创建用户失败"}
             
             return {
                 "success": True,
                 "data": {
                     "openid": openid,
                     "user_id": user_id,
+                    "phone": phone,
+                    "need_bind_phone": not is_valid_phone(phone),
                 }
             }
     except Exception as e:
@@ -102,17 +131,67 @@ async def bind_phone(data: BindPhoneRequest):
     if not verify_code(data.phone, data.code):
         return {"success": False, "error": "验证码错误或已过期"}
     
-    # 绑定成功（这里应该更新数据库）
-    return {"success": True, "message": "绑定成功"}
+    db = get_db()
+    users = await db.get("users", {"openid": data.openid})
+    if isinstance(users, dict) and users.get("error"):
+        return {"success": False, "error": "查询用户失败"}
+
+    user_id = f"wx_{data.openid[:16]}"
+    if users and not isinstance(users, dict):
+        user = users[0]
+        user_id = user.get("user_id") or user_id
+        updated = await db.patch(
+            "users",
+            {"openid": data.openid},
+            {
+                "phone": data.phone,
+                "user_id": user_id,
+            },
+        )
+        if isinstance(updated, dict) and updated.get("error"):
+            return {"success": False, "error": "更新手机号失败"}
+    else:
+        created = await db.post(
+            "users",
+            {
+                "user_id": user_id,
+                "openid": data.openid,
+                "phone": data.phone,
+            },
+        )
+        if isinstance(created, dict) and created.get("error"):
+            return {"success": False, "error": "绑定手机号失败"}
+
+    return {
+        "success": True,
+        "message": "绑定成功",
+        "data": {
+            "openid": data.openid,
+            "user_id": user_id,
+            "phone": data.phone,
+            "need_bind_phone": False,
+        },
+    }
 
 
 @router.get("/user/{user_id}")
 async def get_user(user_id: str):
     """获取用户信息"""
+    db = get_db()
+    users = await db.get("users", {"user_id": user_id})
+    if isinstance(users, dict) and users.get("error"):
+        return {"success": False, "error": "查询用户失败"}
+    if not users or isinstance(users, dict):
+        return {"success": False, "error": "用户不存在"}
+
+    user = users[0]
     return {
-        "user_id": user_id,
-        "openid": "",
-        "phone": "",
-        "nickname": "",
-        "avatar": ""
+        "success": True,
+        "data": {
+            "user_id": user.get("user_id", user_id),
+            "openid": user.get("openid", ""),
+            "phone": user.get("phone", ""),
+            "nickname": user.get("nickname", ""),
+            "avatar": user.get("avatar", ""),
+        },
     }
