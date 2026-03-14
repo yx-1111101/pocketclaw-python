@@ -36,7 +36,7 @@ async def gateway_request(method: str, params: dict = None) -> dict:
                     "minProtocol": 3,
                     "maxProtocol": 3,
                     "role": "operator",
-                    "scopes": ["operator.read", "operator.write"],
+                    "scopes": ["operator.read", "operator.write", "operator.admin"],
                     "auth": {"token": GATEWAY_TOKEN},
                     "client": {
                         "id": "webchat-ui",
