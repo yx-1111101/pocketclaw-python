@@ -13,7 +13,7 @@ from app.config import PORT, SUPABASE_URL, SUPABASE_KEY
 from app.core.security import parse_user_from_auth_header
 from app.core.supabase import get_db, init_db
 from app.core.websocket import manager
-from api import device, wechat, proxy
+from api import device, wechat, proxy, system
 
 # 初始化
 init_db(SUPABASE_URL, SUPABASE_KEY)
@@ -35,6 +35,7 @@ app.add_middleware(
 app.include_router(device.router)
 app.include_router(wechat.router)
 app.include_router(proxy.router)
+app.include_router(system.router)
 
 
 def _truncate_text(text: str, limit: int = 2000) -> str:
