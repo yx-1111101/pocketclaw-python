@@ -168,6 +168,82 @@ async def proxy_websocket(websocket: WebSocket, device_id: str):
         logger.exception("[ws_proxy] error ip=%s device_id=%s", client_ip, device_id)
         manager.disconnect(device_id)
 
+# ── 小程序 WebSocket 接入 ────────────────────────────────
+@app.websocket("/ws/miniapp/{device_id}")
+async def miniapp_websocket(websocket: WebSocket, device_id: str):
+    """小程序连接此端点，后端将消息中继到设备 Gateway"""
+    client_ip = websocket.client.host if websocket.client else "-"
+    logger.info("[ws_miniapp] connect ip=%s device_id=%s", client_ip, device_id)
+    
+    await websocket.accept()
+    manager.connect_client(device_id, websocket)
+
+    # 通知小程序连接成功
+    await websocket.send_text(json.dumps({
+        "type": "connected",
+        "device_id": device_id,
+        "device_online": device_id in manager.active_connections,
+    }))
+
+    try:
+        while True:
+            raw = await websocket.receive_text()
+            try:
+                msg = json.loads(raw)
+            except Exception:
+                await websocket.send_text(json.dumps({"type": "error", "error": "invalid json"}))
+                continue
+
+            msg_type = msg.get("type", "")
+
+            # ── 聊天消息 ──────────────────────────────────
+            if msg_type == "chat":
+                if device_id not in manager.active_connections:
+                    await websocket.send_text(json.dumps({
+                        "type": "error", "error": "device not connected"
+                    }))
+                    continue
+
+                # 向设备发送 chat.send 请求
+                try:
+                    result = await manager.send_request(device_id, "v1/chat/completions", {
+                        "messages": msg.get("messages", []),
+                        "model": msg.get("model", "default"),
+                        "stream": False,
+                    })
+                    await websocket.send_text(json.dumps({
+                        "type": "chat_reply",
+                        "data": result.get("data"),
+                    }))
+                except Exception as e:
+                    await websocket.send_text(json.dumps({
+                        "type": "error", "error": str(e)
+                    }))
+
+            # ── ping ──────────────────────────────────────
+            elif msg_type == "ping":
+                await websocket.send_text(json.dumps({"type": "pong"}))
+
+            # ── 设备状态查询 ──────────────────────────────
+            elif msg_type == "device_status":
+                await websocket.send_text(json.dumps({
+                    "type": "device_status",
+                    "online": device_id in manager.active_connections,
+                }))
+
+            else:
+                await websocket.send_text(json.dumps({
+                    "type": "error", "error": f"unknown type: {msg_type}"
+                }))
+
+    except WebSocketDisconnect:
+        logger.info("[ws_miniapp] disconnect ip=%s device_id=%s", client_ip, device_id)
+    except Exception:
+        logger.exception("[ws_miniapp] error ip=%s device_id=%s", client_ip, device_id)
+    finally:
+        manager.disconnect_client(device_id)
+
+
 # 系统接口
 @app.get("/health")
 async def health():
