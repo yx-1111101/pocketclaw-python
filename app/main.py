@@ -14,6 +14,7 @@ from app.core.security import parse_user_from_auth_header
 from app.core.supabase import get_db, init_db
 from app.core.websocket import manager
 from api import device, wechat, proxy, system, cron, skills
+from app.core.gateway_client import gateway_chat_history
 
 # 初始化
 init_db(SUPABASE_URL, SUPABASE_KEY)
@@ -174,19 +175,23 @@ async def proxy_websocket(websocket: WebSocket, device_id: str):
 # ── 小程序 WebSocket 接入 ────────────────────────────────
 @app.websocket("/ws/miniapp/{device_id}")
 async def miniapp_websocket(websocket: WebSocket, device_id: str):
-    """小程序连接此端点，后端将消息中继到设备 Gateway"""
+    """小程序连接此端点，流式转发 Gateway chat"""
+    from app.core.gateway_client import gateway_chat_stream, gateway_chat_abort
+
     client_ip = websocket.client.host if websocket.client else "-"
     logger.info("[ws_miniapp] connect ip=%s device_id=%s", client_ip, device_id)
-    
+
     await websocket.accept()
     manager.connect_client(device_id, websocket)
 
-    # 通知小程序连接成功
     await websocket.send_text(json.dumps({
         "type": "connected",
         "device_id": device_id,
         "device_online": device_id in manager.active_connections,
     }))
+
+    current_run_id = None   # 当前正在运行的 runId，用于 abort
+    chat_task = None        # 当前 chat 流式任务
 
     try:
         while True:
@@ -199,35 +204,75 @@ async def miniapp_websocket(websocket: WebSocket, device_id: str):
 
             msg_type = msg.get("type", "")
 
-            # ── 聊天消息 ──────────────────────────────────
+            # ── 聊天消息（流式） ───────────────────────────
             if msg_type == "chat":
-                if device_id not in manager.active_connections:
-                    await websocket.send_text(json.dumps({
-                        "type": "error", "error": "device not connected"
-                    }))
+                # 取最后一条 user 消息作为 text
+                messages = msg.get("messages", [])
+                text = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
+                model = msg.get("model", "openclaw:main")
+
+                if not text:
+                    await websocket.send_text(json.dumps({"type": "error", "error": "empty message"}))
                     continue
 
-                # 向设备发送 chat.send 请求
-                try:
-                    result = await manager.send_request(device_id, "v1/chat/completions", {
-                        "messages": msg.get("messages", []),
-                        "model": msg.get("model", "default"),
-                        "stream": False,
-                    })
-                    await websocket.send_text(json.dumps({
-                        "type": "chat_reply",
-                        "data": result.get("data"),
-                    }))
-                except Exception as e:
-                    await websocket.send_text(json.dumps({
-                        "type": "error", "error": str(e)
-                    }))
+                # 取消上一个未完成的 chat
+                if chat_task and not chat_task.done():
+                    chat_task.cancel()
+
+                async def on_delta(delta: str):
+                    try:
+                        await websocket.send_text(json.dumps({"type": "stream_delta", "delta": delta}))
+                    except Exception:
+                        pass
+
+                async def on_final(run_id: str, full_text: str):
+                    nonlocal current_run_id
+                    current_run_id = None
+                    try:
+                        await websocket.send_text(json.dumps({
+                            "type": "stream_end",
+                            "run_id": run_id,
+                            "content": full_text,
+                        }))
+                    except Exception:
+                        pass
+
+                async def on_error(err: str):
+                    nonlocal current_run_id
+                    current_run_id = None
+                    try:
+                        await websocket.send_text(json.dumps({"type": "error", "error": err}))
+                    except Exception:
+                        pass
+
+                async def run_chat():
+                    nonlocal current_run_id
+                    run_id = await gateway_chat_stream(
+                        message=text,
+                        model=model,
+                        on_delta=on_delta,
+                        on_final=on_final,
+                        on_error=on_error,
+                    )
+                    current_run_id = run_id
+
+                chat_task = asyncio.create_task(run_chat())
+
+            # ── 中止回复 ──────────────────────────────────
+            elif msg_type == "abort":
+                run_id = msg.get("run_id") or current_run_id
+                if chat_task and not chat_task.done():
+                    chat_task.cancel()
+                if run_id:
+                    asyncio.create_task(gateway_chat_abort(run_id))
+                current_run_id = None
+                await websocket.send_text(json.dumps({"type": "aborted"}))
 
             # ── ping ──────────────────────────────────────
             elif msg_type == "ping":
                 await websocket.send_text(json.dumps({"type": "pong"}))
 
-            # ── 设备状态查询 ──────────────────────────────
+            # ── 设备状态 ──────────────────────────────────
             elif msg_type == "device_status":
                 await websocket.send_text(json.dumps({
                     "type": "device_status",
@@ -244,7 +289,17 @@ async def miniapp_websocket(websocket: WebSocket, device_id: str):
     except Exception:
         logger.exception("[ws_miniapp] error ip=%s device_id=%s", client_ip, device_id)
     finally:
+        if chat_task and not chat_task.done():
+            chat_task.cancel()
         manager.disconnect_client(device_id)
+
+
+# ── Chat History ──────────────────────────────────────────────────────────────
+
+@app.get("/system/chat/history")
+async def get_chat_history(session: str = "main", limit: int = 50):
+    messages = await gateway_chat_history(session_key=session, limit=limit)
+    return {"success": True, "messages": messages}
 
 
 # 系统接口
