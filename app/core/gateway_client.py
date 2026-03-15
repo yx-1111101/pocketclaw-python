@@ -125,7 +125,6 @@ async def gateway_chat_stream(
                     break
 
             # 接收流式事件
-            # 事件格式:
             #   event="agent", payload.stream="assistant" → delta 在 payload.data.delta
             #   event="chat",  payload.state="delta"/"final" → 内容在 payload.message.content[0].text
             full_text = ""
@@ -146,14 +145,15 @@ async def gateway_chat_stream(
                 # agent 流式 delta（逐字推送）
                 if event_name == "agent" and payload.get("stream") == "assistant":
                     delta = payload.get("data", {}).get("delta", "")
-                    if delta and on_delta:
-                        await on_delta(delta)
+                    if delta:
+                        full_text += delta
+                        if on_delta:
+                            await on_delta(delta)
 
                 # chat 状态事件
                 elif event_name == "chat":
                     state = payload.get("state")
                     msg = payload.get("message", {})
-                    # 提取文本
                     content_list = msg.get("content", [])
                     text_parts = [
                         c.get("text", "") for c in content_list
@@ -161,9 +161,12 @@ async def gateway_chat_stream(
                     ] if isinstance(content_list, list) else [str(content_list)]
                     text = "".join(text_parts)
 
+                    if text:
+                        full_text += text
+
                     if state == "final":
                         if on_final:
-                            await on_final(run_id, text)
+                            await on_final(run_id, full_text)
                         break
 
                     elif state == "error":
