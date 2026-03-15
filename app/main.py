@@ -405,6 +405,33 @@ async def root():
         return FileResponse(index_file)
     return {"message": "PocketClaw Cloud Service"}
 
+# ── 文件上传 ─────────────────────────────────────────────────────────────────
+import shutil, mimetypes
+from fastapi import UploadFile, File as FastFile
+from fastapi.responses import FileResponse as FResp
+
+UPLOAD_DIR = Path("/tmp/pocketclaw_uploads")
+UPLOAD_DIR.mkdir(exist_ok=True)
+
+@app.post("/system/upload")
+async def upload_file(file: UploadFile = FastFile(...)):
+    suffix = Path(file.filename or "file").suffix or ""
+    unique_name = f"{uuid.uuid4()}{suffix}"
+    dest = UPLOAD_DIR / unique_name
+    with dest.open("wb") as f:
+        shutil.copyfileobj(file.file, f)
+    size = dest.stat().st_size
+    mime = mimetypes.guess_type(file.filename or "")[0] or "application/octet-stream"
+    return {"success": True, "url": f"/system/files/{unique_name}", "name": file.filename, "size": size, "mime": mime}
+
+@app.get("/system/files/{filename}")
+async def get_file(filename: str):
+    path = UPLOAD_DIR / filename
+    if not path.exists():
+        return JSONResponse(status_code=404, content={"error": "not found"})
+    return FResp(path)
+
+# ── 静态文件（必须放最后）────────────────────────────────────────────────────
 @app.get("/{path:path}")
 async def static_files(path: str):
     file_path = PUBLIC_DIR / path
@@ -415,39 +442,3 @@ async def static_files(path: str):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=PORT)
-
-
-# ── 文件上传 ──────────────────────────────────────────────────────────────────
-
-import shutil, mimetypes
-from fastapi import UploadFile, File as FastFile
-from fastapi.responses import FileResponse as FResp
-
-UPLOAD_DIR = Path("/tmp/pocketclaw_uploads")
-UPLOAD_DIR.mkdir(exist_ok=True)
-
-@app.post("/system/upload")
-async def upload_file(file: UploadFile = FastFile(...)):
-    """上传文件，返回可访问的 URL"""
-    suffix = Path(file.filename or "file").suffix or ""
-    unique_name = f"{uuid.uuid4()}{suffix}"
-    dest = UPLOAD_DIR / unique_name
-    with dest.open("wb") as f:
-        shutil.copyfileobj(file.file, f)
-    
-    size = dest.stat().st_size
-    mime = mimetypes.guess_type(file.filename or "")[0] or "application/octet-stream"
-    return {
-        "success": True,
-        "url": f"/system/files/{unique_name}",
-        "name": file.filename,
-        "size": size,
-        "mime": mime,
-    }
-
-@app.get("/system/files/{filename}")
-async def get_file(filename: str):
-    path = UPLOAD_DIR / filename
-    if not path.exists():
-        return JSONResponse(status_code=404, content={"error": "not found"})
-    return FResp(path)
