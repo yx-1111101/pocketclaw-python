@@ -97,14 +97,17 @@ async def gateway_chat_stream(
             await _connect_gateway(ws)
 
             req_id = str(uuid.uuid4())
+            idempotency_key = str(uuid.uuid4())
             await ws.send(json.dumps({
                 "type": "req",
                 "id": req_id,
                 "method": "chat.send",
                 "params": {
-                    "text": message,
+                    "message": message,
                     "model": model,
                     "sessionKey": session_key,
+                    "idempotencyKey": idempotency_key,
+                    "deliver": False,
                 },
             }))
 

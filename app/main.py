@@ -15,7 +15,7 @@ from app.core.security import parse_user_from_auth_header
 from app.core.supabase import get_db, init_db
 from app.core.websocket import manager
 from api import device, wechat, proxy, system, cron, skills, sessions
-from app.core.gateway_client import gateway_chat_history, gateway_request
+from app.core.gateway_client import gateway_chat_history, gateway_request, gateway_chat_stream
 
 # 初始化
 init_db(SUPABASE_URL, SUPABASE_KEY)
@@ -328,7 +328,7 @@ async def chat_http(body: ChatRequest):
         nonlocal error_msg
         error_msg = err
 
-    await __import__("app.core.gateway_client", fromlist=["gateway_chat_stream"]).gateway_chat_stream(
+    await gateway_chat_stream(
         message=text,
         model=body.model,
         session_key=body.session_key,
