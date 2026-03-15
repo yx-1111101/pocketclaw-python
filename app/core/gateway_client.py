@@ -122,8 +122,6 @@ async def gateway_chat_stream(
                     if not data.get("ok"):
                         raise RuntimeError(data.get("error", {}).get("message", "chat.send failed"))
                     run_id = data.get("payload", {}).get("runId")
-                    if DEBUG_STREAM:
-                        logger.info(f"[stream] ack payload keys: {list(data.get('payload',{}).keys())}")
                     break
 
             # 接收流式事件
