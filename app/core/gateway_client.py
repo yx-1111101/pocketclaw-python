@@ -104,7 +104,6 @@ async def gateway_chat_stream(
                 "method": "chat.send",
                 "params": {
                     "message": message,
-                    "model": model,
                     "sessionKey": session_key,
                     "idempotencyKey": idempotency_key,
                     "deliver": False,
