@@ -122,11 +122,13 @@ async def gateway_chat_stream(
                     if not data.get("ok"):
                         raise RuntimeError(data.get("error", {}).get("message", "chat.send failed"))
                     run_id = data.get("payload", {}).get("runId")
+                    if DEBUG_STREAM:
+                        logger.info(f"[stream] ack payload keys: {list(data.get('payload',{}).keys())}")
                     break
 
             # 接收流式事件
-            #   event="agent", payload.stream="assistant" → delta 在 payload.data.delta
-            #   event="chat",  payload.state="delta"/"final" → 内容在 payload.message.content[0].text
+            # chat.send 只推 lifecycle/final，不推 assistant 内容
+            # 收到 final 后再调 chat.history 取最后一条助手消息
             full_text = ""
             deadline = asyncio.get_event_loop().time() + STREAM_TIMEOUT
             while True:
@@ -142,7 +144,7 @@ async def gateway_chat_stream(
                 event_name = data.get("event")
                 payload = data.get("payload", {})
 
-                # agent 流式 delta（逐字推送）
+                # agent stream=assistant → 有 delta 推送（部分场景有）
                 if event_name == "agent" and payload.get("stream") == "assistant":
                     delta = payload.get("data", {}).get("delta", "")
                     if delta:
@@ -150,21 +152,51 @@ async def gateway_chat_stream(
                         if on_delta:
                             await on_delta(delta)
 
-                # chat 状态事件
                 elif event_name == "chat":
                     state = payload.get("state")
+                    # 有 message 字段时直接用
                     msg = payload.get("message", {})
-                    content_list = msg.get("content", [])
-                    text_parts = [
-                        c.get("text", "") for c in content_list
-                        if isinstance(c, dict) and c.get("type") == "text"
-                    ] if isinstance(content_list, list) else [str(content_list)]
-                    text = "".join(text_parts)
-
-                    if text:
-                        full_text += text
+                    if msg:
+                        content_list = msg.get("content", [])
+                        text_parts = [
+                            c.get("text", "") for c in content_list
+                            if isinstance(c, dict) and c.get("type") == "text"
+                        ] if isinstance(content_list, list) else []
+                        full_text += "".join(text_parts)
 
                     if state == "final":
+                        # 如果没有收到内容，从 chat.history 补取
+                        if not full_text:
+                            try:
+                                req2 = str(uuid.uuid4())
+                                await ws.send(json.dumps({
+                                    "type": "req", "id": req2,
+                                    "method": "chat.history",
+                                    "params": {"sessionKey": session_key, "limit": 5},
+                                }))
+                                hist_deadline = asyncio.get_event_loop().time() + 8
+                                while True:
+                                    rem2 = hist_deadline - asyncio.get_event_loop().time()
+                                    if rem2 <= 0: break
+                                    r2 = await asyncio.wait_for(ws.recv(), timeout=rem2)
+                                    d2 = json.loads(r2)
+                                    if d2.get("type") == "res" and d2.get("id") == req2:
+                                        msgs = d2.get("payload", {}).get("messages", [])
+                                        for m in reversed(msgs):
+                                            if m.get("role") == "assistant":
+                                                c = m.get("content", [])
+                                                if isinstance(c, list):
+                                                    full_text = "".join(
+                                                        x.get("text", "") for x in c
+                                                        if isinstance(x, dict) and x.get("type") == "text"
+                                                    )
+                                                elif isinstance(c, str):
+                                                    full_text = c
+                                                break
+                                        break
+                            except Exception as e:
+                                logger.warning("[gateway_chat_stream] history fallback failed: %s", e)
+
                         if on_final:
                             await on_final(run_id, full_text)
                         break
