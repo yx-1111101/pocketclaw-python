@@ -125,6 +125,9 @@ async def gateway_chat_stream(
                     break
 
             # 接收流式事件
+            # 事件格式:
+            #   event="agent", payload.stream="assistant" → delta 在 payload.data.delta
+            #   event="chat",  payload.state="delta"/"final" → 内容在 payload.message.content[0].text
             full_text = ""
             deadline = asyncio.get_event_loop().time() + STREAM_TIMEOUT
             while True:
@@ -136,26 +139,38 @@ async def gateway_chat_stream(
 
                 if data.get("type") != "event":
                     continue
-                payload = data.get("payload", {})
-                state = payload.get("state")
 
-                if state == "delta":
-                    delta = payload.get("delta", "")
-                    full_text += delta
-                    if on_delta and delta:
+                event_name = data.get("event")
+                payload = data.get("payload", {})
+
+                # agent 流式 delta（逐字推送）
+                if event_name == "agent" and payload.get("stream") == "assistant":
+                    delta = payload.get("data", {}).get("delta", "")
+                    if delta and on_delta:
                         await on_delta(delta)
 
-                elif state == "final":
-                    full_content = payload.get("content") or full_text
-                    if on_final:
-                        await on_final(run_id, full_content)
-                    break
+                # chat 状态事件
+                elif event_name == "chat":
+                    state = payload.get("state")
+                    msg = payload.get("message", {})
+                    # 提取文本
+                    content_list = msg.get("content", [])
+                    text_parts = [
+                        c.get("text", "") for c in content_list
+                        if isinstance(c, dict) and c.get("type") == "text"
+                    ] if isinstance(content_list, list) else [str(content_list)]
+                    text = "".join(text_parts)
 
-                elif state == "error":
-                    err_msg = payload.get("message", "stream error")
-                    if on_error:
-                        await on_error(err_msg)
-                    break
+                    if state == "final":
+                        if on_final:
+                            await on_final(run_id, text)
+                        break
+
+                    elif state == "error":
+                        err_msg = payload.get("message", "stream error")
+                        if on_error:
+                            await on_error(err_msg)
+                        break
 
     except Exception as e:
         logger.error("[gateway_chat_stream] error: %s", e)
