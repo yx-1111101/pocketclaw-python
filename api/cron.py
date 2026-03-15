@@ -1,18 +1,26 @@
-"""Cron 任务管理 API（调用本地 Gateway WS）"""
-from fastapi import APIRouter, HTTPException
+"""Cron 任务管理 API（通过设备代理调用本地 Gateway WS）"""
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from typing import Optional, Any
-from app.core.gateway_client import gateway_request
 
-router = APIRouter(prefix="/system/cron", tags=["定时任务"])
+from app.core.websocket import manager
+from app.core.supabase import get_db
+from api.proxy import _require_user_device
+
+router = APIRouter(prefix="/devices", tags=["定时任务"])
 
 
-@router.get("")
-async def list_cron():
+@router.get("/{device_id}/cron")
+async def list_cron(device_id: str, request: Request):
     """获取所有 cron 任务"""
+    db = get_db()
+    await _require_user_device(db, request, device_id)
     try:
-        payload = await gateway_request("cron.list", {})
+        result = await manager.send_request(device_id, "cron.list", {})
+        payload = result.get("data") or {}
         return {"success": True, "jobs": payload.get("jobs", [])}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -26,9 +34,11 @@ class CronAddRequest(BaseModel):
     delivery: Optional[dict] = None
 
 
-@router.post("")
-async def add_cron(body: CronAddRequest):
+@router.post("/{device_id}/cron")
+async def add_cron(device_id: str, body: CronAddRequest, request: Request):
     """创建 cron 任务"""
+    db = get_db()
+    await _require_user_device(db, request, device_id)
     job = {
         "schedule": body.schedule,
         "payload": body.payload,
@@ -39,10 +49,12 @@ async def add_cron(body: CronAddRequest):
         job["name"] = body.name
     if body.delivery:
         job["delivery"] = body.delivery
-
     try:
-        payload = await gateway_request("cron.add", {"job": job})
+        result = await manager.send_request(device_id, "cron.add", {"job": job})
+        payload = result.get("data") or {}
         return {"success": True, "job": payload.get("job", {})}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -54,44 +66,63 @@ class CronPatchRequest(BaseModel):
     payload: Optional[dict] = None
 
 
-@router.patch("/{job_id}")
-async def update_cron(job_id: str, body: CronPatchRequest):
+@router.patch("/{device_id}/cron/{job_id}")
+async def update_cron(device_id: str, job_id: str, body: CronPatchRequest, request: Request):
     """更新 cron 任务"""
+    db = get_db()
+    await _require_user_device(db, request, device_id)
     patch = {k: v for k, v in body.dict().items() if v is not None}
     if not patch:
         raise HTTPException(status_code=400, detail="没有要更新的字段")
     try:
-        payload = await gateway_request("cron.update", {"jobId": job_id, "patch": patch})
+        result = await manager.send_request(device_id, "cron.update", {"jobId": job_id, "patch": patch})
+        payload = result.get("data") or {}
         return {"success": True, "job": payload.get("job", {})}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.delete("/{job_id}")
-async def delete_cron(job_id: str):
+@router.delete("/{device_id}/cron/{job_id}")
+async def delete_cron(device_id: str, job_id: str, request: Request):
     """删除 cron 任务"""
+    db = get_db()
+    await _require_user_device(db, request, device_id)
     try:
-        await gateway_request("cron.remove", {"jobId": job_id})
+        await manager.send_request(device_id, "cron.remove", {"jobId": job_id})
         return {"success": True}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/{job_id}/run")
-async def run_cron(job_id: str):
+@router.post("/{device_id}/cron/{job_id}/run")
+async def run_cron(device_id: str, job_id: str, request: Request):
     """立即执行 cron 任务"""
+    db = get_db()
+    await _require_user_device(db, request, device_id)
     try:
-        payload = await gateway_request("cron.run", {"jobId": job_id})
+        result = await manager.send_request(device_id, "cron.run", {"jobId": job_id})
+        payload = result.get("data") or {}
         return {"success": True, "result": payload}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/{job_id}/runs")
-async def cron_runs(job_id: str):
+@router.get("/{device_id}/cron/{job_id}/runs")
+async def cron_runs(device_id: str, job_id: str, request: Request):
     """获取 cron 任务运行历史"""
+    db = get_db()
+    await _require_user_device(db, request, device_id)
     try:
-        payload = await gateway_request("cron.runs", {"jobId": job_id})
+        result = await manager.send_request(device_id, "cron.runs", {"jobId": job_id})
+        payload = result.get("data") or {}
         return {"success": True, "runs": payload.get("runs", [])}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
