@@ -5,6 +5,7 @@ import time
 import uuid
 from pathlib import Path
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime, timezone
@@ -14,7 +15,7 @@ from app.core.security import parse_user_from_auth_header
 from app.core.supabase import get_db, init_db
 from app.core.websocket import manager
 from api import device, wechat, proxy, system, cron, skills, sessions
-from app.core.gateway_client import gateway_chat_history
+from app.core.gateway_client import gateway_chat_history, gateway_request
 
 # 初始化
 init_db(SUPABASE_URL, SUPABASE_KEY)
@@ -295,12 +296,53 @@ async def miniapp_websocket(websocket: WebSocket, device_id: str):
         manager.disconnect_client(device_id)
 
 
-# ── Chat History ──────────────────────────────────────────────────────────────
+# ── Chat ──────────────────────────────────────────────────────────────────────
 
 @app.get("/system/chat/history")
 async def get_chat_history(session: str = "main", limit: int = 50):
     messages = await gateway_chat_history(session_key=session, limit=limit)
     return {"success": True, "messages": messages}
+
+
+class ChatRequest(BaseModel):
+    messages: list
+    model: str = "openclaw:main"
+    session_key: str = "main"
+
+
+@app.post("/system/chat")
+async def chat_http(body: ChatRequest):
+    """HTTP fallback: 非流式 chat（WS 不可用时使用）"""
+    text = next((m["content"] for m in reversed(body.messages) if m.get("role") == "user"), "")
+    if not text:
+        return JSONResponse(status_code=400, content={"error": "empty message"})
+
+    result_content = None
+    error_msg = None
+
+    async def on_final(run_id, content):
+        nonlocal result_content
+        result_content = content
+
+    async def on_error(err):
+        nonlocal error_msg
+        error_msg = err
+
+    await __import__("app.core.gateway_client", fromlist=["gateway_chat_stream"]).gateway_chat_stream(
+        message=text,
+        model=body.model,
+        session_key=body.session_key,
+        on_final=on_final,
+        on_error=on_error,
+    )
+
+    if error_msg:
+        return JSONResponse(status_code=500, content={"error": error_msg})
+
+    return {
+        "success": True,
+        "choices": [{"message": {"role": "assistant", "content": result_content or ""}}],
+    }
 
 
 # 系统接口
