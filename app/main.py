@@ -13,7 +13,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime, timezone
 
 from app.config import PORT, REDIS_HOST, REDIS_PORT, REDIS_DB, SUPABASE_URL, SUPABASE_KEY
-from app.core.supabase import init_db
+from app.core.security import parse_user_from_auth_header
+from app.core.supabase import get_db, init_db
 from app.core.redis_cache import init_cache
 from app.core.websocket import manager
 from api import device, wechat, proxy, cron, skills, sessions
