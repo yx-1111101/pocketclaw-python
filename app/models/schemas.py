@@ -10,6 +10,7 @@ class HeartbeatRequest(BaseModel):
     firmware_version: Optional[str] = None
     timestamp: Optional[int] = None
     device_secret_hash: Optional[str] = None
+    device_secret: Optional[str] = None  # 首次注册时携带明文，云端存储后用于 HMAC 验签
 
 class BindRequest(BaseModel):
     device_id: str
