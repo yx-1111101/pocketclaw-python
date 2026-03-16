@@ -55,6 +55,7 @@ async def get_device_binding(device_id: str) -> Optional[dict]:
                 "limit": "1",
             },
         )
+        print(f"[auth] device_bindings query status={resp.status_code} body={resp.text}")
         if resp.status_code >= 400:
             return None
         rows = resp.json()
