@@ -88,11 +88,11 @@ async def chat_completions(
                 print(f"[stream] error: {e}")
                 yield f"data: {{'error': '{str(e)}'}}\n\n"
 
-        print(f"[llm_proxy] stream=True provider={route.provider} model={route.model}")
+        print(f"[llm_proxy] stream=True provider={route.provider} model={route.model} messages={request.messages}")
         return StreamingResponse(sse_generator(), media_type="text/event-stream")
 
     # 5b. 非流式响应
-    print(f"[llm_proxy] stream=False provider={route.provider} model={route.model}")
+    print(f"[llm_proxy] stream=False provider={route.provider} model={route.model} messages={request.messages}")
     try:
         result = await provider.chat_completion(
             messages=request.messages,
