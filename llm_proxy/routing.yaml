@@ -1,8 +1,12 @@
 # LLM Proxy Routing Configuration
 #
-# providers:     define all available LLM providers (OpenAI-compatible endpoints)
+# providers:     define all available LLM providers (services identified by base_url)
 # model_routing: map model names to a specific provider + optional overrides
 # default:       fallback provider/model when the request doesn't match any rule
+#
+# Terminology:
+#   provider:      the LLM API service (e.g. zhizengzeng, openai), identified by base_url
+#   request_type:  the API protocol (e.g. openai, anthropic), determines request/response format
 
 # ── Default ───────────────────────────────────────────────────────────────────
 # Used when the requested model has no explicit entry in model_routing,
@@ -12,24 +16,25 @@ default:
 
 # ── Providers ─────────────────────────────────────────────────────────────────
 # Each provider must have a name, base_url, and api_key (or api_key_env).
-# format: openai   → standard Bearer-token OpenAI-compatible endpoint
+# request_type: openai    → standard Bearer-token OpenAI-compatible endpoint
+# request_type: anthropic → Anthropic API protocol
 providers:
   - name: zhizengzeng
     base_url: https://api.zhizengzeng.com/v1
     api_key_env: ZHIZENGZENG_API_KEY        # override via env var
     api_key: sk-zk24e880cf60d89ae4cbb7ef06a1d72af7769b222ed0cad5
-    format: openai
+    request_type: openai
 
   # Example: add more providers here
   # - name: openai
   #   base_url: https://api.openai.com/v1
   #   api_key_env: OPENAI_API_KEY
-  #   format: openai
+  #   request_type: openai
   #
   # - name: zhipu
   #   base_url: https://open.bigmodel.cn/api/paas/v4
   #   api_key_env: ZHIPU_API_KEY
-  #   format: openai
+  #   request_type: openai
 
 # ── Model routing ─────────────────────────────────────────────────────────────
 # Each entry maps a model name (as sent by the client) to:

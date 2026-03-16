@@ -5,9 +5,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from llm_proxy.auth import DeviceAuth, verify_device_auth
+from llm_proxy.exchange_rate import get_usd_to_cny, convert_to_cny
 from llm_proxy.providers import registry, resolve
 from llm_proxy.redis_db import get_device as cache_get_device, set_device as cache_set_device
-from llm_proxy.supabase_client import get_device as db_get_device
+from llm_proxy.supabase_client import get_device as db_get_device, log_proxy_request, get_pricing
+from llm_proxy.usage_stats import calculator
 
 router = APIRouter(prefix="/llm", tags=["LLM代理"])
 
@@ -64,7 +66,7 @@ async def chat_completions(
     if not device_secret_hash:
         raise HTTPException(
             status_code=401,
-            detail="Device not registered. Please send a heartbeat first.",
+         detail="Device not registered. Please send a heartbeat first.",
         )
 
     if not DeviceAuth.verify_signature(device_id, timestamp, signature, device_secret_hash):
@@ -96,6 +98,41 @@ async def chat_completions(
             timeout=route.timeout,
             **kwargs,
         )
+
+        # 6. 记录使用统计
+        try:
+            # Extract usage from response using the provider's request_type protocol
+            extractor = calculator.get_extractor(provider.cfg.request_type)
+            usage = extractor.extract_usage(result)
+
+            cost_original = 0.0
+            cost_currency = "USD"
+            cost_cny = 0.0
+
+            # Get pricing for cost calculation
+            pricing_data = await get_pricing(route.model, route.provider, provider.cfg.request_type)
+            if pricing_data:
+                cost_original, cost_currency = calculator.calculate_cost(usage, pricing_data)
+                usd_to_cny = await get_usd_to_cny()
+                cost_cny = convert_to_cny(cost_original, cost_currency, usd_to_cny)
+
+            # Log to database
+            user_id = device.get("user_id")
+            await log_proxy_request(
+                user_id=user_id,
+                device_id=device_id,
+                model=route.model,
+                provider=route.provider,
+                request_type=provider.cfg.request_type,
+                usage=usage,
+                cost_original=cost_original,
+                cost_currency=cost_currency,
+                cost_cny=cost_cny,
+            )
+        except Exception as log_error:
+        # Don't fail the request if logging fails
+            print(f"[llm_proxy] Failed to log usage: {log_error}")
+
         return ChatResponse(success=True, data=result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"LLM API error: {str(e)}")

@@ -2,9 +2,13 @@
 LLM 提供商适配器 + 路由配置加载
 
 配置文件: llm_proxy/routing.yaml
-  - providers:     所有可用的 LLM 提供商
+  - providers:     所有可用的 LLM 提供商（按 base_url 区分，如 zhizengzeng、openai 等）
   - model_routing: 模型名 → 提供商 + 可选参数覆盖
   - default:       无匹配规则时的默认提供商/模型
+
+术语说明:
+  provider:      LLM API 服务提供商（如 zhizengzeng、openai），由 base_url 区分
+  request_type:  API 协议类型（如 openai、anthropic），决定请求/响应格式
 """
 
 from __future__ import annotations
@@ -26,7 +30,7 @@ class ProviderConfig:
     base_url: str
     api_key: str = ""
     api_key_env: str = ""
-    format: str = "openai"      # only "openai" supported for now
+    request_type: str = "openai"   # API protocol: "openai" or "anthropic"
 
 
 @dataclass
@@ -62,7 +66,7 @@ def load_routing_config(path: Path = _CONFIG_PATH) -> RoutingConfig:
             base_url=p["base_url"].rstrip("/"),
             api_key=p.get("api_key", ""),
             api_key_env=p.get("api_key_env", ""),
-            format=p.get("format", "openai"),
+            request_type=p.get("request_type", "openai"),
         )
         # env var takes precedence
         if cfg.api_key_env:
