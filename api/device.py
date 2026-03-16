@@ -81,8 +81,8 @@ async def _require_auth_user(db, request: Request) -> dict:
     return user
 
 
-async def _load_user_devices(db, user_pk: int) -> list:
-    bindings = await db.get("device_bindings", {"user_id": user_pk})
+async def _load_user_devices(db, owner_user_id: str) -> list:
+    bindings = await db.get("device_bindings", {"user_id": owner_user_id})
     if isinstance(bindings, dict) and bindings.get("error"):
         raise HTTPException(status_code=500, detail=f"查询绑定关系失败: {bindings['error']}")
     if not bindings or isinstance(bindings, dict):
@@ -91,11 +91,11 @@ async def _load_user_devices(db, user_pk: int) -> list:
     devices = []
     visited = set()
     for binding in bindings:
-        device_pk = binding.get("device_id")
-        if device_pk in visited or device_pk is None:
+        bound_device_id = str(binding.get("device_id") or "").strip()
+        if not bound_device_id or bound_device_id in visited:
             continue
-        visited.add(device_pk)
-        rows = await db.get("devices", {"id": device_pk})
+        visited.add(bound_device_id)
+        rows = await db.get("devices", {"device_id": bound_device_id})
         if isinstance(rows, dict) and rows.get("error"):
             raise HTTPException(status_code=500, detail=f"查询设备失败: {rows['error']}")
         if not rows or isinstance(rows, dict):
@@ -110,11 +110,11 @@ async def _load_user_devices(db, user_pk: int) -> list:
 async def list_devices(request: Request):
     db = get_db()
     owner = await _require_auth_user(db, request)
-    owner_pk = owner.get("id")
-    if owner_pk is None:
-        return JSONResponse({"success": False, "error": "用户数据异常（缺少主键）"}, status_code=500)
+    owner_user_id = str(owner.get("user_id") or "").strip()
+    if not owner_user_id:
+        return JSONResponse({"success": False, "error": "用户数据异常（缺少 user_id）"}, status_code=500)
 
-    devices = await _load_user_devices(db, owner_pk)
+    devices = await _load_user_devices(db, owner_user_id)
     return {"success": True, "data": {"devices": devices}}
 
 
@@ -161,7 +161,7 @@ async def heartbeat(data: HeartbeatRequest):
             return JSONResponse({"success": False, "error": f"设备心跳写入失败: {created['error']}"}, status_code=500)
         logger.info("[heartbeat] insert ok device_id=%s", data.device_id)
 
-    bindings = await db.get("device_bindings", {"device_id": existing["id"]}) if existing else []
+    bindings = await db.get("device_bindings", {"device_id": data.device_id})
     if isinstance(bindings, dict) and bindings.get("error"):
         logger.error("[heartbeat] query bindings failed device_id=%s error=%s", data.device_id, bindings["error"])
         return JSONResponse({"success": False, "error": f"查询设备绑定失败: {bindings['error']}"}, status_code=500)
@@ -196,11 +196,13 @@ async def bind(data: BindRequest, request: Request):
             logger.warning("[bind] pairing code mismatch user_id=%s device_id=%s", owner_user_id, data.device_id)
             return JSONResponse({"error": "pairing code mismatch"}, status_code=403)
 
-    owner_pk = owner.get("id")
-    if owner_pk is None:
-        return JSONResponse({"error": "token 对应用户数据异常"}, status_code=500)
+    if not owner_user_id:
+        return JSONResponse({"error": "token 对应用户数据异常（缺少 user_id）"}, status_code=500)
+    resolved_device_id = str(device.get("device_id") or data.device_id).strip()
+    if not resolved_device_id:
+        return JSONResponse({"error": "设备数据异常（缺少 device_id）"}, status_code=500)
 
-    existing_binding = await db.get("device_bindings", {"user_id": owner_pk, "device_id": device["id"]})
+    existing_binding = await db.get("device_bindings", {"user_id": owner_user_id, "device_id": resolved_device_id})
     if isinstance(existing_binding, dict) and existing_binding.get("error"):
         logger.error(
             "[bind] query bindings failed user_id=%s device_id=%s error=%s",
@@ -210,7 +212,7 @@ async def bind(data: BindRequest, request: Request):
         )
         return JSONResponse({"error": f"查询绑定关系失败: {existing_binding['error']}"}, status_code=500)
     if not existing_binding or isinstance(existing_binding, dict):
-        created = await db.post("device_bindings", {"user_id": owner_pk, "device_id": device["id"], "role": "owner"})
+        created = await db.post("device_bindings", {"user_id": owner_user_id, "device_id": resolved_device_id, "role": "owner"})
         if isinstance(created, dict) and created.get("error"):
             logger.error(
                 "[bind] create binding failed user_id=%s device_id=%s error=%s",

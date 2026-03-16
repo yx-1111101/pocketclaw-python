@@ -77,6 +77,7 @@
 
 ### POST /api/auth/phone-login
 手机号 + 验证码登录（验证码通过后自动查找/创建用户）。
+同一手机号始终返回同一个 `user_id`（手机号作为账号归属主键）。
 
 **请求**
 ```json
@@ -92,7 +93,8 @@
     "user_id": "ph_abc123...",
     "openid": "",
     "phone": "13800138000",
-    "need_bind_phone": false
+    "need_bind_phone": false,
+    "token": "<jwt>"
   }
 }
 ```
@@ -101,6 +103,7 @@
 
 ### POST /api/auth/bind-phone
 微信用户绑定手机号（需验证码）。
+当手机号已存在用户时，会直接切换到该手机号用户并返回其 `user_id/token`。
 
 **请求**
 ```json
@@ -120,7 +123,8 @@
     "openid": "oLcdw3...",
     "user_id": "wx_oLcdw3...",
     "phone": "13800138000",
-    "need_bind_phone": false
+    "need_bind_phone": false,
+    "token": "<jwt>"
   }
 }
 ```

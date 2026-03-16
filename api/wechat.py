@@ -60,6 +60,16 @@ def db_is_ready(db: Any) -> bool:
     return bool(db and getattr(db, "url", ""))
 
 
+def is_unique_violation_error(err: Exception) -> bool:
+    text = str(err or "").lower()
+    return (
+        "duplicate key" in text
+        or "unique constraint" in text
+        or "already exists" in text
+        or "23505" in text
+    )
+
+
 async def fetch_single_user(db: Any, filters: dict) -> Optional[dict]:
     result = await db.get("users", filters)
     if isinstance(result, dict) and result.get("error"):
@@ -84,6 +94,16 @@ async def patch_user(db: Any, filters: dict, payload: dict) -> None:
     result = await db.patch("users", filters, payload)
     if isinstance(result, dict) and result.get("error"):
         raise RuntimeError(result["error"])
+
+
+async def ensure_user_id(db: Any, user: dict, filters: dict, prefix: str) -> str:
+    user_id = str(user.get("user_id") or "").strip()
+    if user_id:
+        return user_id
+    user_id = make_user_id(prefix)
+    await patch_user(db, filters, {"user_id": user_id})
+    user["user_id"] = user_id
+    return user_id
 
 
 @router.post("/login")
@@ -120,6 +140,11 @@ async def wechat_login(data: WechatLoginRequest):
                     phone = normalize_phone(existing.get("phone", ""))
                     if not existing.get("user_id"):
                         await patch_user(db, {"openid": openid}, {"user_id": user_id})
+                    if is_valid_phone(phone):
+                        # 当手机号已归属到其他 user_id 时，以手机号用户为准，保证数据一致。
+                        phone_owner = await fetch_single_user(db, {"phone": phone})
+                        if phone_owner:
+                            user_id = await ensure_user_id(db, phone_owner, {"phone": phone}, "ph")
                 else:
                     created = await insert_user(
                         db,
@@ -192,19 +217,28 @@ async def phone_login(data: PhoneLoginRequest):
     try:
         user = await fetch_single_user(db, {"phone": phone})
         if not user:
-            user = await insert_user(db, {
-                "user_id": make_user_id("ph"),
-                "phone": phone,
-            })
+            try:
+                user = await insert_user(db, {
+                    "user_id": make_user_id("ph"),
+                    "phone": phone,
+                })
+            except Exception as e:
+                # 并发首次登录时，另一个请求可能刚创建成功；回查即可。
+                if not is_unique_violation_error(e):
+                    raise
+                user = await fetch_single_user(db, {"phone": phone})
+                if not user:
+                    raise
+        user_id = await ensure_user_id(db, user, {"phone": phone}, "ph")
         return {
             "success": True,
             "message": "登录成功",
             "data": {
-                "user_id": user.get("user_id", ""),
+                "user_id": user_id,
                 "openid": user.get("openid", ""),
                 "phone": phone,
                 "need_bind_phone": False,
-                "token": make_auth_token(user.get("user_id", "")),
+                "token": make_auth_token(user_id),
             },
         }
     except ValueError:
@@ -234,22 +268,21 @@ async def bind_phone(data: BindPhoneRequest):
         openid_user = await fetch_single_user(db, {"openid": data.openid})
         phone_user = await fetch_single_user(db, {"phone": phone})
 
-        if openid_user and phone_user and openid_user.get("user_id") != phone_user.get("user_id"):
-            return {"success": False, "error": "手机号已绑定其他用户"}
-
-        if openid_user:
-            user_id = openid_user.get("user_id", f"wx_{data.openid[:16]}")
-            await patch_user(db, {"user_id": user_id}, {"phone": phone})
-            user = openid_user
-            user["phone"] = phone
-        elif phone_user:
-            current_openid = str(phone_user.get("openid") or "").strip()
-            if current_openid and current_openid != data.openid:
-                return {"success": False, "error": "手机号已绑定其他微信账号"}
-            user_id = phone_user.get("user_id", make_user_id("ph"))
-            await patch_user(db, {"user_id": user_id}, {"openid": data.openid, "phone": phone})
+        # 手机号已存在时，始终以手机号用户为准，保证同手机号落到同一 user_id。
+        if phone_user:
             user = phone_user
-            user["openid"] = data.openid
+            user_id = await ensure_user_id(db, user, {"phone": phone}, "ph")
+
+            # 仅在手机号用户尚未记录 openid 时做一次补全，避免覆盖已有值。
+            current_openid = str(user.get("openid") or "").strip()
+            if not current_openid and data.openid:
+                await patch_user(db, {"phone": phone}, {"openid": data.openid})
+                user["openid"] = data.openid
+            user["phone"] = phone
+        elif openid_user:
+            user = openid_user
+            user_id = await ensure_user_id(db, user, {"openid": data.openid}, "wx")
+            await patch_user(db, {"openid": data.openid}, {"phone": phone})
             user["phone"] = phone
         else:
             user = await insert_user(db, {

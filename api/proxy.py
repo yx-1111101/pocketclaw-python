@@ -9,7 +9,7 @@ from app.core.security import parse_user_from_auth_header
 from app.core.supabase import get_db
 from app.core.websocket import manager
 
-router = APIRouter(prefix="/device", tags=["网关"])
+router = APIRouter(prefix="/devices", tags=["网关"])
 
 
 def is_online(device: dict) -> bool:
@@ -74,11 +74,14 @@ async def _require_user_device(db, request: Request, device_id: str):
     if not device:
         raise HTTPException(status_code=404, detail="device not found")
 
-    owner_pk = user.get("id")
-    if owner_pk is None:
-        raise HTTPException(status_code=500, detail="用户数据异常（缺少主键）")
+    owner_user_id = str(user.get("user_id") or "").strip()
+    if not owner_user_id:
+        raise HTTPException(status_code=500, detail="用户数据异常（缺少 user_id）")
+    resolved_device_id = str(device.get("device_id") or device_id).strip()
+    if not resolved_device_id:
+        raise HTTPException(status_code=500, detail="设备数据异常（缺少 device_id）")
 
-    binding = await _fetch_single(db, "device_bindings", {"user_id": owner_pk, "device_id": device.get("id")})
+    binding = await _fetch_single(db, "device_bindings", {"user_id": owner_user_id, "device_id": resolved_device_id})
     if not binding:
         raise HTTPException(status_code=403, detail="无权访问该设备")
     return user, device, binding
@@ -120,7 +123,9 @@ async def get_device(device_id: str, request: Request):
 async def unbind_device(device_id: str, request: Request):
     db = get_db()
     user, device, _ = await _require_user_device(db, request, device_id)
-    deleted = await db.delete("device_bindings", {"user_id": user["id"], "device_id": device["id"]})
+    owner_user_id = str(user.get("user_id") or "").strip()
+    resolved_device_id = str(device.get("device_id") or device_id).strip()
+    deleted = await db.delete("device_bindings", {"user_id": owner_user_id, "device_id": resolved_device_id})
     if isinstance(deleted, dict) and deleted.get("error"):
         return JSONResponse({"ok": False, "error": f"解绑失败: {deleted['error']}"}, status_code=500)
     return {"ok": True}
