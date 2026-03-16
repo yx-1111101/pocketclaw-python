@@ -16,7 +16,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, AsyncIterator, Dict, Optional
 
 import httpx
 import yaml
@@ -122,6 +122,30 @@ class OpenAIProvider:
             )
             response.raise_for_status()
             return response.json()
+
+    async def chat_completion_stream(
+        self,
+        messages: list,
+        model: str,
+        timeout: float = 60.0,
+        **kwargs,
+    ) -> AsyncIterator[str]:
+        kwargs.pop("stream", None)
+        payload = {"model": model, "messages": messages, "stream": True, **kwargs}
+        headers = {
+            "Authorization": f"Bearer {self.cfg.api_key}",
+            "Content-Type": "application/json",
+        }
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            async with client.stream(
+                "POST",
+                f"{self.cfg.base_url}/chat/completions",
+                headers=headers,
+                json=payload,
+            ) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    yield line
 
 
 # ── Registry ──────────────────────────────────────────────────────────────────
