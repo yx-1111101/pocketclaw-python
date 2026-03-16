@@ -67,8 +67,8 @@ async def load_pricing_to_supabase(
 async def main() -> None:
     import os
 
-    supabase_url = os.environ.get("SUPABASE_URL", "")
-    supabase_key = os.environ.get("SUPABASE_KEY", "")
+    supabase_url = os.environ.get("SUPABASE_URL", "https://irbnhwtyhzltpjiuuyql.supabase.co")
+    supabase_key = os.environ.get("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlyYm5od3R5aHpsdHBqaXV1eXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MzMzMDc3NCwiZXhwIjoyMDg4OTA2Nzc0fQ.u0qwNGdrtniSxIlihYKpbM6HWh10UXlxPCE4y8-8Blk")
 
     if not supabase_url or not supabase_key:
         print("Error: SUPABASE_URL and SUPABASE_KEY environment variables required")
