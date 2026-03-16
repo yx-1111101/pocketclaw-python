@@ -22,6 +22,7 @@ from api import device, wechat, proxy, cron, skills, sessions
 # 初始化 Supabase（持久化存储）和 Redis（缓存）
 init_db(SUPABASE_URL, SUPABASE_KEY)
 init_cache(REDIS_HOST, REDIS_PORT, REDIS_DB)
+logger = logging.getLogger("uvicorn.error")
 
 # 创建应用
 app = FastAPI(title="PocketClaw Cloud Service")
