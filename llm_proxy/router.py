@@ -48,6 +48,7 @@ async def chat_completions(
     # 1. Check device_bindings — if device_id exists in the table, allow the request
     binding = await get_device_binding(device_id)
     if not binding:
+        print(f"[auth] 401 device not in device_bindings | device={device_id}")
         raise HTTPException(status_code=401, detail="Device not authorized")
 
     # 3. 路由

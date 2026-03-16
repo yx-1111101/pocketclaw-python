@@ -1,8 +1,8 @@
 """设备认证模块"""
 import hmac
 import hashlib
-from typing import Tuple
-from fastapi import Header
+from typing import Optional, Tuple
+from fastapi import Header, HTTPException, Request
 
 
 class DeviceAuth:
@@ -44,16 +44,11 @@ class DeviceAuth:
 
 
 async def verify_device_auth(
-    x_device_id: str = Header(..., alias="X-Device-Id"),
+    request: Request,
+    x_device_id: Optional[str] = Header(None, alias="X-Device-Id"),
 ) -> Tuple[str, int, str]:
-    """
-    FastAPI 依赖项：从 Header 提取设备 ID。
-    实际授权由路由处理器通过 device_bindings 表完成。
-
-    Headers:
-        X-Device-Id: 设备 ID
-
-    Returns:
-        (device_id, 0, "") 元组（保持签名兼容）
-    """
+    if not x_device_id:
+        print(f"[auth] 401 missing X-Device-Id header | ip={request.client.host} path={request.url.path}")
+        raise HTTPException(status_code=401, detail="Missing X-Device-Id header")
+    print(f"[auth] device={x_device_id} ip={request.client.host}")
     return x_device_id, 0, ""
