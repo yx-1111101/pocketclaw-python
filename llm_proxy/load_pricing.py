@@ -74,7 +74,7 @@ async def main() -> None:
         print("Error: SUPABASE_URL and SUPABASE_KEY environment variables required")
         sys.exit(1)
 
-    yaml_path = sys.argv[1] if len(sys.argv) > 1 else "pricing.yaml"
+    yaml_path = sys.argv[1] if len(sys.argv) > 1 else "llm_proxy/pricing.yaml"
 
     if not Path(yaml_path).exists():
         print(f"Error: pricing file not found: {yaml_path}")

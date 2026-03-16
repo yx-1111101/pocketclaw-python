@@ -38,6 +38,29 @@ async def get_device(device_id: str) -> Optional[dict]:
         return rows[0] if rows else None
 
 
+async def get_device_binding(device_id: str) -> Optional[dict]:
+    """
+    Check device_bindings table for a device_id entry.
+    Returns the first binding row (with user_id) if found, None otherwise.
+    """
+    if not _url:
+        return None
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        resp = await client.get(
+            f"{_url}/rest/v1/device_bindings",
+            headers=_headers,
+            params={
+                "device_id": f"eq.{device_id}",
+                "order": "created_at.asc",
+                "limit": "1",
+            },
+        )
+        if resp.status_code >= 400:
+            return None
+        rows = resp.json()
+        return rows[0] if rows else None
+
+
 async def log_proxy_request(
     user_id: Optional[str],
     device_id: str,

@@ -4,11 +4,10 @@ from typing import Optional, Tuple
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from llm_proxy.auth import DeviceAuth, verify_device_auth
+from llm_proxy.auth import verify_device_auth
 from llm_proxy.exchange_rate import get_usd_to_cny, convert_to_cny
 from llm_proxy.providers import registry, resolve
-from llm_proxy.redis_db import get_device as cache_get_device, set_device as cache_set_device
-from llm_proxy.supabase_client import get_device as db_get_device, log_proxy_request, get_pricing
+from llm_proxy.supabase_client import get_device_binding, log_proxy_request, get_pricing
 from llm_proxy.usage_stats import calculator
 
 router = APIRouter(prefix="/llm", tags=["LLM代理"])
@@ -31,16 +30,6 @@ class ChatResponse(BaseModel):
     error: Optional[str] = None
 
 
-async def _get_device(device_id: str) -> Optional[dict]:
-    """Cache-aside: Redis (60s TTL) → Supabase."""
-    device = await cache_get_device(device_id)
-    if device is None:
-        device = await db_get_device(device_id)
-        if device:
-            await cache_set_device(device_id, device)
-    return device
-
-
 @router.post("/chat/completions", response_model=ChatResponse)
 async def chat_completions(
     request: ChatRequest,
@@ -54,23 +43,12 @@ async def chat_completions(
         X-Timestamp:   Unix 时间戳（秒）
         Authorization: HMAC-SHA256 <signature>
     """
-    device_id, timestamp, signature = auth_info
+    device_id, _timestamp, _signature = auth_info
 
-    # 1. 查找设备（Redis → Supabase）
-    device = await _get_device(device_id)
-    if not device:
-        raise HTTPException(status_code=404, detail="Device not found")
-
-    # 2. 验签 — key = bytes.fromhex(device_secret_hash)，无需持有明文 secret
-    device_secret_hash = device.get("device_secret_hash")
-    if not device_secret_hash:
-        raise HTTPException(
-            status_code=401,
-         detail="Device not registered. Please send a heartbeat first.",
-        )
-
-    if not DeviceAuth.verify_signature(device_id, timestamp, signature, device_secret_hash):
-        raise HTTPException(status_code=401, detail="Invalid signature")
+    # 1. Check device_bindings — if device_id exists in the table, allow the request
+    binding = await get_device_binding(device_id)
+    if not binding:
+        raise HTTPException(status_code=401, detail="Device not authorized")
 
     # 3. 路由
     try:
@@ -116,8 +94,8 @@ async def chat_completions(
                 usd_to_cny = await get_usd_to_cny()
                 cost_cny = convert_to_cny(cost_original, cost_currency, usd_to_cny)
 
-            # Log to database
-            user_id = device.get("user_id")
+            # Log to database — use user_id from device binding
+            user_id = binding.get("user_id")
             await log_proxy_request(
                 user_id=user_id,
                 device_id=device_id,
