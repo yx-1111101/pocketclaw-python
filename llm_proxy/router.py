@@ -71,22 +71,60 @@ async def chat_completions(
     # 5a. 流式响应
     if request.stream:
         async def sse_generator() -> AsyncIterator[str]:
+            import json as _json
+            usage = {}
             try:
-                line_count = 0
                 async for line in provider.chat_completion_stream(
                     messages=request.messages,
                     model=route.model,
                     timeout=route.timeout,
                     **kwargs,
                 ):
-                    line_count += 1
-                    if line_count <= 3:
-                        print(f"[stream] line {line_count}: {repr(line)}")
+                    # Parse usage from the chunk that carries it (usually the last data line)
+                    if line.startswith("data: ") and line != "data: [DONE]":
+                        try:
+                            chunk = _json.loads(line[6:])
+                            chunk_usage = chunk.get("usage")
+                            if chunk_usage:
+                                usage = chunk_usage
+                        except Exception:
+                            pass
                     yield line + "\n"
-                print(f"[stream] done, total lines={line_count}")
             except Exception as e:
                 print(f"[stream] error: {e}")
                 yield f"data: {{'error': '{str(e)}'}}\n\n"
+                return
+
+            # Log usage after stream completes
+            try:
+                extractor = calculator.get_extractor(provider.cfg.request_type)
+                extracted = extractor.extract_usage({"usage": usage})
+
+                cost_original = 0.0
+                cost_currency = "USD"
+                cost_cny = 0.0
+
+                pricing_data = await get_pricing(route.model, route.provider, provider.cfg.request_type)
+                if pricing_data and extracted:
+                    cost_original, cost_currency = calculator.calculate_cost(extracted, pricing_data)
+                    usd_to_cny = await get_usd_to_cny()
+                    cost_cny = convert_to_cny(cost_original, cost_currency, usd_to_cny)
+
+                user_id = binding.get("user_id")
+                await log_proxy_request(
+                    user_id=user_id,
+                    device_id=device_id,
+                    model=route.model,
+                    provider=route.provider,
+                    request_type=provider.cfg.request_type,
+                    usage=extracted,
+                    cost_original=cost_original,
+                    cost_currency=cost_currency,
+                    cost_cny=cost_cny,
+                )
+                print(f"[stream] logged usage={extracted} cost_cny={cost_cny:.6f}")
+            except Exception as log_error:
+                print(f"[stream] failed to log usage: {log_error}")
 
         print(f"[llm_proxy] stream=True provider={route.provider} model={route.model} messages={request.messages}")
         return StreamingResponse(sse_generator(), media_type="text/event-stream")
