@@ -72,19 +72,27 @@ async def chat_completions(
     if request.stream:
         async def sse_generator() -> AsyncIterator[str]:
             try:
+                line_count = 0
                 async for line in provider.chat_completion_stream(
                     messages=request.messages,
                     model=route.model,
                     timeout=route.timeout,
                     **kwargs,
                 ):
+                    line_count += 1
+                    if line_count <= 3:
+                        print(f"[stream] line {line_count}: {repr(line)}")
                     yield line + "\n"
+                print(f"[stream] done, total lines={line_count}")
             except Exception as e:
+                print(f"[stream] error: {e}")
                 yield f"data: {{'error': '{str(e)}'}}\n\n"
 
+        print(f"[llm_proxy] stream=True provider={route.provider} model={route.model}")
         return StreamingResponse(sse_generator(), media_type="text/event-stream")
 
     # 5b. 非流式响应
+    print(f"[llm_proxy] stream=False provider={route.provider} model={route.model}")
     try:
         result = await provider.chat_completion(
             messages=request.messages,
@@ -92,6 +100,7 @@ async def chat_completions(
             timeout=route.timeout,
             **kwargs,
         )
+        print(f"[llm_proxy] non-stream result keys={list(result.keys()) if isinstance(result, dict) else type(result)}")
 
         # 6. 记录使用统计
         try:
