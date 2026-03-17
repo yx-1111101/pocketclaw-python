@@ -318,6 +318,23 @@ async def gateway_proxy(device_id: str, path: str, request: Request):
     except HTTPException:
         raise
 
+# 复数路径兼容（主路径：/devices/..., 保留 /device/... 以兼容旧客户端）
+@app.get("/devices/{device_id}/status")
+async def get_status_plural(device_id: str):
+    return await get_status(device_id)
+
+@app.get("/devices/{device_id}")
+async def get_device_plural(device_id: str):
+    return await get_device(device_id)
+
+@app.delete("/devices/{device_id}/bind")
+async def unbind_device_plural(device_id: str):
+    return await unbind_device(device_id)
+
+@app.post("/devices/{device_id}/gateway/{path:path}")
+async def gateway_proxy_plural(device_id: str, path: str, request: Request):
+    return await gateway_proxy(device_id, path, request)
+
 # ============== 微信登录 ==============
 WECHAT_APP_ID = os.getenv("WECHAT_APP_ID", "wxc6ee0aee83c794e7")
 WECHAT_APP_SECRET = os.getenv("WECHAT_APP_SECRET", "1264e0e7f7a90e65a92061355873bb37")
