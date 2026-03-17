@@ -6,14 +6,14 @@ import time
 import uuid
 from pathlib import Path
 from typing import Dict, Set
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi import WebSocket as FWS
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime, timezone
 
 from app.config import PORT, REDIS_HOST, REDIS_PORT, REDIS_DB, SUPABASE_URL, SUPABASE_KEY
-from app.core.security import parse_user_from_auth_header
+from app.core.security import parse_auth_token, parse_user_from_auth_header
 from app.core.supabase import get_db, init_db
 from app.core.redis_cache import init_cache
 from app.core.websocket import manager
@@ -221,22 +221,63 @@ async def proxy_websocket(websocket: WebSocket, device_id: str):
 
 # 客户端流式 WebSocket
 @app.websocket("/stream/{device_id}")
-async def stream_websocket(websocket: FWS, device_id: str):
+async def stream_websocket(
+    websocket: FWS,
+    device_id: str,
+    token: str = Query(default=""),
+):
     """
     小程序/客户端通过此端点接收实时流式事件。
 
+    连接时须在 query 参数中带上 token：
+      wss://host/stream/{device_id}?token=<Bearer token>
+
     客户端发送：
-      {"action": "chat", "message": "...", "sessionKey": "..."}
+      {"action": "chat", "message": "...", "sessionKey": "agent:main:main"}
+      {"action": "ping"}
 
     服务端推送：
-      {"type": "stream", "request_id": "...", "event": {"type": "text", "data": {"delta": "..."}}}
+      {"type": "stream",     "request_id": "...", "event": {"type": "text", "data": {"delta": "..."}}}
       {"type": "stream_end", "request_id": "...", "data": {"content": "...", "done": true}}
+      {"type": "auth_error", "error": "..."}
+      {"type": "error",      "error": "..."}
+      {"type": "pong"}
     """
     await websocket.accept()
+
+    # ── 鉴权 ──────────────────────────────────────────────────
+    if not token:
+        await websocket.send_text(json.dumps({"type": "auth_error", "error": "缺少 token"}))
+        await websocket.close(code=4001)
+        return
+
+    try:
+        payload = parse_auth_token(token)
+        user_id = str(payload.get("user_id") or "").strip()
+        if not user_id:
+            raise ValueError("token 缺少用户标识")
+    except Exception as e:
+        await websocket.send_text(json.dumps({"type": "auth_error", "error": str(e)}))
+        await websocket.close(code=4001)
+        return
+
+    # 校验用户是否绑定了该设备
+    db = get_db()
+    bindings = await db.get("device_bindings", {"user_id": user_id, "device_id": device_id})
+    if not bindings or (isinstance(bindings, dict) and bindings.get("error")):
+        await websocket.send_text(json.dumps({"type": "auth_error", "error": "无权访问该设备"}))
+        await websocket.close(code=4003)
+        return
+
+    logger.info("[ws_stream] authed user_id=%s device_id=%s", user_id, device_id)
+    # ── 鉴权结束 ───────────────────────────────────────────────
 
     if device_id not in stream_clients:
         stream_clients[device_id] = set()
     stream_clients[device_id].add(websocket)
+
+    # sessionKey 稳定默认值：agent:main:{user_id}（每个用户独立，不随机）
+    default_session_key = f"agent:main:{user_id}"
 
     try:
         while True:
@@ -250,7 +291,8 @@ async def stream_websocket(websocket: FWS, device_id: str):
 
             if action == "chat":
                 message = msg.get("message", "")
-                session_key = msg.get("sessionKey", f"agent:main:stream-{uuid.uuid4().hex[:8]}")
+                # 优先使用客户端传入的 sessionKey，否则用稳定默认值
+                session_key = msg.get("sessionKey") or default_session_key
 
                 if not manager.is_connected(device_id):
                     await websocket.send_text(json.dumps({
@@ -260,7 +302,7 @@ async def stream_websocket(websocket: FWS, device_id: str):
                     continue
 
                 try:
-                    result = await manager.send_request(
+                    await manager.send_request(
                         device_id,
                         "v1/chat/completions",
                         {
@@ -280,9 +322,9 @@ async def stream_websocket(websocket: FWS, device_id: str):
                 await websocket.send_text(json.dumps({"type": "pong"}))
 
     except WebSocketDisconnect:
-        pass
+        logger.info("[ws_stream] disconnect user_id=%s device_id=%s", user_id, device_id)
     except Exception:
-        pass
+        logger.exception("[ws_stream] error user_id=%s device_id=%s", user_id, device_id)
     finally:
         stream_clients.get(device_id, set()).discard(websocket)
         if device_id in stream_clients and not stream_clients[device_id]:
