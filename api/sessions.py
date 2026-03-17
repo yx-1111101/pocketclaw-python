@@ -1,5 +1,5 @@
 """Sessions 管理 API（通过设备代理调用本地 Gateway WS）"""
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Query
 from pydantic import BaseModel
 from typing import Optional
 
@@ -71,6 +71,58 @@ async def delete_session(device_id: str, session_key: str, request: Request):
     try:
         await manager.send_request(device_id, "sessions.delete", {"sessionKey": session_key})
         return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── chat.history ────────────────────────────────────────────────────────────
+
+@router.get("/{device_id}/chat/history")
+async def get_chat_history(
+    device_id: str,
+    request: Request,
+    sessionKey: Optional[str] = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+):
+    """通过 Gateway WS 获取会话历史（chat.history RPC）"""
+    db = get_db()
+    await _require_user_device(db, request, device_id)
+    params: dict = {"limit": limit}
+    if sessionKey:
+        params["sessionKey"] = sessionKey
+    try:
+        result = await manager.send_request(device_id, "chat.history", params)
+        payload = result.get("data") or {}
+        return {"success": True, "messages": payload.get("messages", []), "sessionKey": payload.get("sessionKey")}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── chat.abort ──────────────────────────────────────────────────────────────
+
+class AbortRequest(BaseModel):
+    sessionKey: Optional[str] = None
+    runId: Optional[str] = None
+
+
+@router.post("/{device_id}/chat/abort")
+async def abort_chat(device_id: str, body: AbortRequest, request: Request):
+    """通过 Gateway WS 中止正在执行的任务（chat.abort RPC）"""
+    db = get_db()
+    await _require_user_device(db, request, device_id)
+    params: dict = {}
+    if body.sessionKey:
+        params["sessionKey"] = body.sessionKey
+    if body.runId:
+        params["runId"] = body.runId
+    try:
+        result = await manager.send_request(device_id, "chat.abort", params, timeout=10.0)
+        payload = result.get("data") or {}
+        return {"success": True, "aborted": payload.get("aborted", True)}
     except HTTPException:
         raise
     except Exception as e:
