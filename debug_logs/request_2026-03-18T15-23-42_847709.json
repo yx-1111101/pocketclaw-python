@@ -1,0 +1,42 @@
+{
+  "timestamp": "2026-03-18T15:23:42.847709",
+  "method": "POST",
+  "url": "https://api.zhizengzeng.com/v1/chat/completions",
+  "request_headers": {
+    "Authorization": "Bearer sk-zk24e880cf60d89ae4cbb7ef06a1d72af7769b222ed0cad5",
+    "Content-Type": "application/json"
+  },
+  "request_body": {
+    "model": "gemini-2.5-flash-lite",
+    "messages": [
+      {
+        "role": "system",
+        "content": "You are a request complexity classifier. Given a user message, output exactly one word:\nSIMPLE   — greetings, trivial lookups, simple questions\nMEDIUM   — explanations, summaries, moderate coding, general writing\nCOMPLEX  — architecture, multi-file code, in-depth analysis, research\nREASONING — math proofs, step-by-step logic, formal derivations\n\nOutput only the single classification word, nothing else."
+      },
+      {
+        "role": "user",
+        "content": "Classify:\n\nSender (untrusted metadata):\n```json\n{\n  \"label\": \"openclaw-control-ui\",\n  \"id\": \"openclaw-control-ui\"\n}\n```\n\n[Wed 2026-03-18 15:09 GMT+8] hi\nSender (untrusted metadata):\n```json\n{\n  \"label\": \"openclaw-control-ui\",\n  \"id\": \"openclaw-control-ui\"\n}\n```\n\n[Wed 2026-03-18 15:14 GMT+8] hi\nSender (untrusted metadata):\n```json\n{\n  \"label\": \"openclaw-control-ui\",\n  \"id\": \"openclaw-control-ui\"\n}\n```\n\n[Wed 2026-03-18 15:23 GMT+8] hi"
+      }
+    ],
+    "temperature": 0.0,
+    "max_tokens": 5
+  },
+  "response_status": 200,
+  "response_headers": {
+    "server": "nginx",
+    "date": "Wed, 18 Mar 2026 07:23:42 GMT",
+    "content-type": "application/json; charset=UTF-8",
+    "content-length": "614",
+    "connection": "keep-alive",
+    "access-control-allow-origin": "*",
+    "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+    "server-timing": "gfet4t7; dur=348",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "SAMEORIGIN",
+    "x-oneapi-request-id": "20260318072342315401243EP151xRv",
+    "x-request-id": "202603181017bd1ba48af9bb7ef7036ed853ba2b",
+    "x-xss-protection": "0"
+  },
+  "response_body": "{\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"SIMPLE\",\"role\":\"assistant\"}}],\"created\":1773818622,\"id\":\"chatcmpl-2026031807234231264727285Tky0wU\",\"model\":\"gemini-2.5-flash-lite\",\"object\":\"chat.completion\",\"usage\":{\"claude_cache_creation_1_h_tokens\":0,\"claude_cache_creation_5_m_tokens\":0,\"completion_tokens\":1,\"completion_tokens_details\":{\"audio_tokens\":0,\"reasoning_tokens\":0,\"text_tokens\":0},\"input_tokens\":0,\"input_tokens_details\":null,\"output_tokens\":0,\"prompt_tokens\":293,\"prompt_tokens_details\":{\"audio_tokens\":0,\"cached_tokens\":0,\"image_tokens\":0,\"text_tokens\":293},\"total_tokens\":294}}"
+}
