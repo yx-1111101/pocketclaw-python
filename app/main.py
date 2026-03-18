@@ -166,6 +166,38 @@ async def _broadcast_stream_clients(device_id: str, message: dict):
         clients.discard(d)
 
 
+def _extract_message_text(message: Any) -> str:
+    """从 Gateway/OpenAI 风格 message 中提取纯文本。"""
+    if isinstance(message, str):
+        return message
+    if not isinstance(message, dict):
+        return ""
+
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: List[str] = []
+        for part in content:
+            if isinstance(part, str):
+                parts.append(part)
+                continue
+            if not isinstance(part, dict):
+                continue
+            # 常见结构：{"type":"text","text":"..."}
+            text_val = part.get("text")
+            if isinstance(text_val, str):
+                parts.append(text_val)
+                continue
+            # 兼容嵌套结构：{"text":{"value":"..."}}
+            if isinstance(text_val, dict):
+                nested = text_val.get("value")
+                if isinstance(nested, str):
+                    parts.append(nested)
+        return "".join(parts)
+    return ""
+
+
 def _convert_gateway_event(event_name: str, payload: dict) -> List[dict]:
     """将 Gateway 的 event/payload 统一转成小程序 stream 协议。"""
     p = payload if isinstance(payload, dict) else {}
@@ -202,7 +234,7 @@ def _convert_gateway_event(event_name: str, payload: dict) -> List[dict]:
             return out
 
     if event_name == "chat":
-        state = p.get("state") or ""
+        state = str(p.get("state") or "").lower()
         if state == "error":
             out.append({
                 "type": "error",
@@ -210,19 +242,36 @@ def _convert_gateway_event(event_name: str, payload: dict) -> List[dict]:
                 "error": p.get("errorMessage") or "chat error",
             })
             return out
-        if state == "streaming" and p.get("delta"):
+
+        # 兼容多种增量格式：
+        # 1) {"state":"streaming","delta":"..."}
+        # 2) {"state":"delta","message":{"content":[{"type":"text","text":"..."}]}}
+        if state in ("streaming", "delta", "stream"):
+            delta_text = p.get("delta")
+            if not isinstance(delta_text, str) or not delta_text:
+                delta_text = _extract_message_text(p.get("message"))
+            if not delta_text and isinstance(p.get("content"), (dict, str, list)):
+                delta_text = _extract_message_text({"content": p.get("content")})
+            if not delta_text:
+                return out
             out.append({
                 "type": "stream",
                 "request_id": run_id,
-                "event": {"type": "text", "data": {"delta": p.get("delta")}},
+                "event": {"type": "text", "data": {"delta": delta_text}},
             })
             return out
-        if state == "final":
+
+        if state in ("final", "done", "completed", "complete"):
+            final_text = (
+                p.get("text")
+                or (p.get("content") if isinstance(p.get("content"), str) else "")
+                or _extract_message_text(p.get("message"))
+            )
             out.append({
                 "type": "stream_end",
                 "request_id": run_id,
                 "data": {
-                    "content": p.get("text") or p.get("content") or "",
+                    "content": final_text or "",
                     "toolCalls": p.get("tool_calls") if isinstance(p.get("tool_calls"), list) else [],
                 },
             })
@@ -238,9 +287,25 @@ def _extract_chat_text(payload: Any) -> str:
     if not isinstance(payload, dict):
         return ""
 
-    text = payload.get("text") or payload.get("content") or payload.get("message")
+    text = payload.get("text")
     if isinstance(text, str) and text.strip():
         return text
+
+    content = payload.get("content")
+    if isinstance(content, str) and content.strip():
+        return content
+    if isinstance(content, list):
+        joined = _extract_message_text({"content": content})
+        if joined.strip():
+            return joined
+
+    from_message = _extract_message_text(payload.get("message"))
+    if from_message.strip():
+        return from_message
+
+    legacy = payload.get("message")
+    if isinstance(legacy, str) and legacy.strip():
+        return legacy
 
     choices = payload.get("choices")
     if isinstance(choices, list) and choices:
@@ -467,13 +532,14 @@ async def stream_websocket(
                         device_id,
                         "chat.send",
                         params,
-                        timeout=30.0,
+                        timeout=120.0,
                     )
                     resp_data = resp.get("data") if isinstance(resp, dict) else resp
+                    done_flag = bool(resp_data.get("done")) if isinstance(resp_data, dict) else False
                     if isinstance(resp_data, dict):
                         logger.info(
-                            "[ws_stream] chat.send response user_id=%s device_id=%s keys=%s",
-                            user_id, device_id, list(resp_data.keys()),
+                            "[ws_stream] chat.send response user_id=%s device_id=%s keys=%s done=%s",
+                            user_id, device_id, list(resp_data.keys()), done_flag,
                         )
                     else:
                         logger.info(
@@ -486,9 +552,9 @@ async def stream_websocket(
                         user_id, device_id, session_key,
                     )
 
-                    # 兜底：若设备直接同步返回最终文本而没有后续 stream 事件，直接回 stream_end 给客户端
+                    # 兜底：若设备直接同步返回结果而没有后续 stream 事件，直接回 stream_end 给客户端
                     final_text = _extract_chat_text(resp_data)
-                    if final_text:
+                    if final_text or done_flag:
                         request_id = (
                             (resp_data.get("runId") if isinstance(resp_data, dict) else None)
                             or (resp_data.get("run_id") if isinstance(resp_data, dict) else None)
@@ -498,7 +564,7 @@ async def stream_websocket(
                             "type": "stream_end",
                             "request_id": request_id,
                             "data": {
-                                "content": final_text,
+                                "content": final_text or "",
                                 "toolCalls": (
                                     resp_data.get("tool_calls")
                                     if isinstance(resp_data, dict) and isinstance(resp_data.get("tool_calls"), list)
@@ -515,7 +581,27 @@ async def stream_websocket(
                             "payload": {"accepted": True},
                         }, ensure_ascii=False))
                 except Exception as e:
-                    # 兼容旧设备：降级到 HTTP 风格 chat/completions
+                    status_code = getattr(e, "status_code", None)
+                    detail = getattr(e, "detail", str(e))
+                    # chat.send 超时时不要再 fallback，避免重复调用和更长阻塞
+                    if status_code == 504:
+                        logger.warning("[ws_stream] chat.send timeout user_id=%s device_id=%s detail=%s", user_id, device_id, detail)
+                        err_text = f"chat.send timeout: {detail}"
+                        if is_chat_req and req_id:
+                            await websocket.send_text(json.dumps({
+                                "type": "res",
+                                "id": req_id,
+                                "ok": False,
+                                "error": err_text,
+                            }, ensure_ascii=False))
+                        else:
+                            await websocket.send_text(json.dumps({
+                                "type": "error",
+                                "error": err_text,
+                            }, ensure_ascii=False))
+                        continue
+
+                    # 兼容旧设备：仅在非超时时降级到 HTTP 风格 chat/completions
                     logger.warning("[ws_stream] chat.send failed, fallback to v1/chat/completions: %s", e)
                     try:
                         fallback = {
