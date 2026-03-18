@@ -293,6 +293,7 @@ async def stream_websocket(
                 message = msg.get("message", "")
                 # 优先使用客户端传入的 sessionKey，否则用稳定默认值
                 session_key = msg.get("sessionKey") or default_session_key
+                attachments = msg.get("attachments")
 
                 if not manager.is_connected(device_id):
                     await websocket.send_text(json.dumps({
@@ -302,14 +303,17 @@ async def stream_websocket(
                     continue
 
                 try:
+                    params = {
+                        "messages": [{"role": "user", "content": message}],
+                        "sessionKey": session_key,
+                        "_stream": True,
+                    }
+                    if attachments:
+                        params["attachments"] = attachments
                     await manager.send_request(
                         device_id,
                         "v1/chat/completions",
-                        {
-                            "messages": [{"role": "user", "content": message}],
-                            "sessionKey": session_key,
-                            "_stream": True,
-                        },
+                        params,
                         method="POST",
                         timeout=180.0,
                     )
