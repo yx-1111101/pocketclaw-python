@@ -157,13 +157,19 @@ async def _broadcast_stream_clients(device_id: str, message: dict):
         return
     raw = json.dumps(message, ensure_ascii=False)
     dead = []
-    for client_ws in clients:
+    # 遍历快照，避免连接增删导致 "Set changed size during iteration"
+    for client_ws in tuple(clients):
         try:
             await client_ws.send_text(raw)
         except Exception:
             dead.append(client_ws)
-    for d in dead:
-        clients.discard(d)
+    if dead:
+        current = stream_clients.get(device_id)
+        if current:
+            for d in dead:
+                current.discard(d)
+            if not current:
+                stream_clients.pop(device_id, None)
 
 
 def _extract_message_text(message: Any) -> str:
