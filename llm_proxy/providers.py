@@ -152,7 +152,7 @@ def log_request_response(logger, method, url, headers, payload, response=None, e
     logger.debug(json.dumps(log_data, indent=2, ensure_ascii=False))
 
     # Also save individual request files for detailed inspection
-    debug_dir = Path("/home/xuyz20/pocketclaw-python/debug_logs")
+    debug_dir = Path("./debug_logs")
     request_file = debug_dir / f"request_{timestamp.replace(':', '-').replace('.', '_')}.json"
 
     try:
