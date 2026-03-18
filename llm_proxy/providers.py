@@ -14,6 +14,9 @@ LLM 提供商适配器 + 路由配置加载
 from __future__ import annotations
 
 import os
+import json
+import logging
+from datetime import datetime
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, Optional
@@ -94,6 +97,70 @@ def load_routing_config(path: Path = _CONFIG_PATH) -> RoutingConfig:
     )
 
 
+# ── Debug logging setup ──────────────────────────────────────────────────────
+
+def setup_debug_logger():
+    """Setup logger for debugging HTTP requests"""
+    logger = logging.getLogger('llm_proxy_debug')
+    logger.setLevel(logging.DEBUG)
+
+    # Avoid duplicate handlers
+    if not logger.handlers:
+        # Create debug_logs directory if it doesn't exist
+        debug_dir = Path("/home/xuyz20/pocketclaw-python/debug_logs")
+        debug_dir.mkdir(exist_ok=True)
+
+        # File handler for debug logs
+        log_file = debug_dir / f"requests_{datetime.now().strftime('%Y%m%d')}.log"
+        file_handler = logging.FileHandler(log_file, encoding='utf-8')
+        file_handler.setLevel(logging.DEBUG)
+
+        # Formatter
+        formatter = logging.Formatter(
+            '%(asctime)s - %(levelname)s - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+
+    return logger
+
+def log_request_response(logger, method, url, headers, payload, response=None, error=None):
+    """Log full request and response details"""
+    timestamp = datetime.now().isoformat()
+
+    log_data = {
+        "timestamp": timestamp,
+        "method": method,
+        "url": url,
+        "request_headers": dict(headers),
+        "request_body": payload,
+    }
+
+    if response is not None:
+        log_data.update({
+            "response_status": response.status_code,
+            "response_headers": dict(response.headers),
+            "response_body": response.text if hasattr(response, 'text') else str(response)
+        })
+
+    if error is not None:
+        log_data["error"] = str(error)
+        log_data["error_type"] = type(error).__name__
+
+    # Log as JSON for easy parsing
+    logger.debug(json.dumps(log_data, indent=2, ensure_ascii=False))
+
+    # Also save individual request files for detailed inspection
+    debug_dir = Path("/home/xuyz20/pocketclaw-python/debug_logs")
+    request_file = debug_dir / f"request_{timestamp.replace(':', '-').replace('.', '_')}.json"
+
+    try:
+        with open(request_file, 'w', encoding='utf-8') as f:
+            json.dump(log_data, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        logger.error(f"Failed to save request file: {e}")
+
 # ── Provider HTTP client ──────────────────────────────────────────────────────
 
 class OpenAIProvider:
@@ -101,6 +168,7 @@ class OpenAIProvider:
 
     def __init__(self, cfg: ProviderConfig):
         self.cfg = cfg
+        self.logger = setup_debug_logger()
 
     async def chat_completion(
         self,
@@ -114,14 +182,30 @@ class OpenAIProvider:
             "Authorization": f"Bearer {self.cfg.api_key}",
             "Content-Type": "application/json",
         }
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                f"{self.cfg.base_url}/chat/completions",
-                headers=headers,
-                json=payload,
+        url = f"{self.cfg.base_url}/chat/completions"
+
+        # Log request details
+        self.logger.info(f"Making request to {url}")
+
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(url, headers=headers, json=payload)
+
+                # Log full request and response
+                log_request_response(
+                    self.logger, "POST", url, headers, payload, response=response
+                )
+
+                response.raise_for_status()
+                return response.json()
+
+        except Exception as e:
+            # Log error details
+            log_request_response(
+                self.logger, "POST", url, headers, payload, error=e
             )
-            response.raise_for_status()
-            return response.json()
+            self.logger.error(f"Request failed: {e}")
+            raise
 
     async def chat_completion_stream(
         self,
@@ -136,16 +220,32 @@ class OpenAIProvider:
             "Authorization": f"Bearer {self.cfg.api_key}",
             "Content-Type": "application/json",
         }
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            async with client.stream(
-                "POST",
-                f"{self.cfg.base_url}/chat/completions",
-                headers=headers,
-                json=payload,
-            ) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    yield line
+        url = f"{self.cfg.base_url}/chat/completions"
+
+        # Log request details
+        self.logger.info(f"Making streaming request to {url}")
+
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                async with client.stream(
+                    "POST", url, headers=headers, json=payload
+                ) as response:
+                    # Log request and initial response
+                    log_request_response(
+                        self.logger, "POST", url, headers, payload, response=response
+                    )
+
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        yield line
+
+        except Exception as e:
+            # Log error details for streaming requests
+            log_request_response(
+                self.logger, "POST", url, headers, payload, error=e
+            )
+            self.logger.error(f"Streaming request failed: {e}")
+            raise
 
 
 # ── Registry ──────────────────────────────────────────────────────────────────
