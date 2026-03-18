@@ -10,13 +10,40 @@ from api.proxy import _require_user_device
 router = APIRouter(prefix="/devices", tags=["会话管理"])
 
 
-@router.get("/{device_id}/sessions")
-async def list_sessions(device_id: str, request: Request):
-    """获取所有会话列表"""
+@router.get("/{device_id}/agents")
+async def list_agents(device_id: str, request: Request):
+    """获取设备上的 Agent 列表（agents.list RPC）"""
     db = get_db()
     await _require_user_device(db, request, device_id)
     try:
-        result = await manager.send_request(device_id, "sessions.list", {})
+        result = await manager.send_request(device_id, "agents.list", {}, timeout=15.0)
+        payload = result.get("data") or {}
+        agents = payload.get("agents") or []
+        # 若设备返回空，至少给出默认 main agent
+        if not agents:
+            agents = [{"id": "main", "name": "main", "isDefault": True}]
+        return {"success": True, "agents": agents}
+    except HTTPException:
+        raise
+    except Exception as e:
+        # agents.list 失败时降级返回默认 agent，不影响正常聊天
+        return {"success": True, "agents": [{"id": "main", "name": "main", "isDefault": True}]}
+
+
+@router.get("/{device_id}/sessions")
+async def list_sessions(
+    device_id: str,
+    request: Request,
+    agentId: Optional[str] = Query(default=None),
+):
+    """获取会话列表（sessions.list RPC），可按 agentId 过滤"""
+    db = get_db()
+    await _require_user_device(db, request, device_id)
+    params: dict = {}
+    if agentId:
+        params["agentId"] = agentId
+    try:
+        result = await manager.send_request(device_id, "sessions.list", params)
         payload = result.get("data") or {}
         return {"success": True, "sessions": payload.get("sessions", [])}
     except HTTPException:
