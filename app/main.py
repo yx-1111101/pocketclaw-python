@@ -2,6 +2,7 @@
 import asyncio
 import json
 import logging
+import os
 import time
 import uuid
 from pathlib import Path
@@ -23,6 +24,7 @@ from api import device, wechat, proxy, cron, skills, sessions, models
 init_db(SUPABASE_URL, SUPABASE_KEY)
 init_cache(REDIS_HOST, REDIS_PORT, REDIS_DB)
 logger = logging.getLogger("uvicorn.error")
+STRICT_STREAM_ROUTING = os.getenv("STRICT_STREAM_ROUTING", "1").strip().lower() not in ("0", "false", "no")
 
 # 创建应用
 app = FastAPI(title="PocketClaw Cloud Service")
@@ -262,26 +264,41 @@ def _resolve_stream_targets(device_id: str, event_name: str, payload: dict) -> S
                 _bind_run_clients(device_id, run_id, targets, session_key=run_session)
                 return targets
 
-    # 4) 无 run/session 时，优先最近发起 chat 的客户端
+    # 4) 严格模式：不做“多客户端猜测”路由。
+    # 但允许 runId 首次出现时，在“唯一 pending 客户端”下建立确定性绑定。
     pending_map = stream_pending_clients.get(device_id, {})
     now = time.time()
     pending_targets = {ws for ws, exp in pending_map.items() if exp > now and ws in online}
-    if len(pending_targets) == 1:
-        only = set(pending_targets)
-        if run_id:
-            _bind_run_clients(device_id, run_id, only)
-        return only
-
-    # 5) 单连接设备兜底
-    if len(online) == 1:
-        only = set(online)
-        if run_id:
+    if STRICT_STREAM_ROUTING:
+        if run_id and len(pending_targets) == 1:
+            only = set(pending_targets)
             _bind_run_clients(device_id, run_id, only, session_key=session_key)
-        return only
+            logger.info(
+                "[ws_stream] bind run_id by unique pending device_id=%s event=%s run_id=%s",
+                device_id, event_name, run_id,
+            )
+            return only
+    else:
+        if pending_targets:
+            selected = max(pending_targets, key=lambda ws: pending_map.get(ws, 0.0))
+            only = {selected}
+            if run_id:
+                _bind_run_clients(device_id, run_id, only)
+            logger.info(
+                "[ws_stream] route pending device_id=%s event=%s run_id=%s online=%s pending=%s",
+                device_id, event_name, run_id or "-", len(online), len(pending_targets),
+            )
+            return only
+
+        if len(online) == 1:
+            only = set(online)
+            if run_id:
+                _bind_run_clients(device_id, run_id, only, session_key=session_key)
+            return only
 
     logger.info(
-        "[ws_stream] drop ambiguous event device_id=%s event=%s run_id=%s session_key=%s online=%s pending=%s",
-        device_id, event_name, run_id or "-", session_key or "-", len(online), len(pending_targets),
+        "[ws_stream] drop unroutable event(strict=%s) device_id=%s event=%s run_id=%s session_key=%s online=%s",
+        STRICT_STREAM_ROUTING, device_id, event_name, run_id or "-", session_key or "-", len(online),
     )
     return set()
 
