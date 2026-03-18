@@ -376,6 +376,11 @@ async def stream_websocket(
             req_id = str(msg.get("id") or "")
             req_params = msg.get("params") if isinstance(msg.get("params"), dict) else {}
 
+            logger.info(
+                "[ws_stream] recv user_id=%s device_id=%s action=%s type=%s method=%s id=%s",
+                user_id, device_id, action or "-", msg_type or "-", method or "-", req_id or "-",
+            )
+
             is_chat_action = action == "chat"
             is_chat_req = (msg_type == "req" and method == "chat.send")
 
@@ -420,6 +425,10 @@ async def stream_websocket(
                         "chat.send",
                         params,
                         timeout=30.0,
+                    )
+                    logger.info(
+                        "[ws_stream] dispatched chat.send user_id=%s device_id=%s session=%s",
+                        user_id, device_id, session_key,
                     )
                     if is_chat_req and req_id:
                         await websocket.send_text(json.dumps({
