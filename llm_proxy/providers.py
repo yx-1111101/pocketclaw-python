@@ -107,7 +107,7 @@ def setup_debug_logger():
     # Avoid duplicate handlers
     if not logger.handlers:
         # Create debug_logs directory if it doesn't exist
-        debug_dir = Path("/home/xuyz20/pocketclaw-python/debug_logs")
+        debug_dir = Path("./debug_logs")
         debug_dir.mkdir(exist_ok=True)
 
         # File handler for debug logs
