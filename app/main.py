@@ -147,12 +147,147 @@ async def upsert_device_presence(device_id: str):
         logger.info("[ws_presence] insert ok device_id=%s", device_id)
 
 
-# 流式客户端管理：device_id → set of client WebSockets
+# 流式客户端管理
+# - stream_clients: 设备维度在线客户端
+# - stream_client_sessions: 客户端声明过的会话订阅（来自 chat.send sessionKey）
+# - stream_run_subscribers: runId 绑定到具体客户端，后续 agent 事件按 runId 定向
+# - stream_pending_clients: 无 run/session 的早期事件，优先路由到最近发起 chat 的客户端
 stream_clients: Dict[str, Set[FWS]] = {}
+stream_client_sessions: Dict[str, Dict[FWS, Set[str]]] = {}
+stream_run_subscribers: Dict[str, Dict[str, Set[FWS]]] = {}
+stream_run_sessions: Dict[str, Dict[str, str]] = {}
+stream_pending_clients: Dict[str, Dict[FWS, float]] = {}
 
 
-async def _broadcast_stream_clients(device_id: str, message: dict):
-    clients = stream_clients.get(device_id, set())
+def _register_stream_client(device_id: str, websocket: FWS):
+    stream_clients.setdefault(device_id, set()).add(websocket)
+    stream_client_sessions.setdefault(device_id, {}).setdefault(websocket, set())
+    stream_pending_clients.setdefault(device_id, {})
+
+
+def _unregister_stream_client(device_id: str, websocket: FWS):
+    clients = stream_clients.get(device_id)
+    if clients:
+        clients.discard(websocket)
+        if not clients:
+            stream_clients.pop(device_id, None)
+
+    session_map = stream_client_sessions.get(device_id)
+    if session_map:
+        session_map.pop(websocket, None)
+        if not session_map:
+            stream_client_sessions.pop(device_id, None)
+
+    pending_map = stream_pending_clients.get(device_id)
+    if pending_map:
+        pending_map.pop(websocket, None)
+        if not pending_map:
+            stream_pending_clients.pop(device_id, None)
+
+    run_map = stream_run_subscribers.get(device_id)
+    if run_map:
+        empty_runs = []
+        for run_id, ws_set in run_map.items():
+            ws_set.discard(websocket)
+            if not ws_set:
+                empty_runs.append(run_id)
+        for run_id in empty_runs:
+            run_map.pop(run_id, None)
+        if not run_map:
+            stream_run_subscribers.pop(device_id, None)
+
+    run_session_map = stream_run_sessions.get(device_id)
+    if run_session_map and device_id not in stream_run_subscribers:
+        stream_run_sessions.pop(device_id, None)
+
+
+def _bind_client_session(device_id: str, websocket: FWS, session_key: str):
+    if not session_key:
+        return
+    session_map = stream_client_sessions.setdefault(device_id, {})
+    session_map.setdefault(websocket, set()).add(session_key)
+
+
+def _mark_client_pending(device_id: str, websocket: FWS, ttl_seconds: int = 45):
+    now = time.time()
+    pending_map = stream_pending_clients.setdefault(device_id, {})
+    pending_map[websocket] = now + ttl_seconds
+    # 惰性清理过期项
+    expired = [ws for ws, exp in pending_map.items() if exp <= now]
+    for ws in expired:
+        pending_map.pop(ws, None)
+
+
+def _bind_run_clients(device_id: str, run_id: str, clients: Set[FWS], session_key: str = ""):
+    if not run_id or not clients:
+        return
+    run_map = stream_run_subscribers.setdefault(device_id, {})
+    run_map.setdefault(run_id, set()).update(clients)
+    if session_key:
+        stream_run_sessions.setdefault(device_id, {})[run_id] = session_key
+
+
+def _resolve_stream_targets(device_id: str, event_name: str, payload: dict) -> Set[FWS]:
+    online = set(stream_clients.get(device_id, set()))
+    if not online:
+        return set()
+
+    p = payload if isinstance(payload, dict) else {}
+    run_id = str(p.get("runId") or p.get("run_id") or p.get("request_id") or "").strip()
+    session_key = str(p.get("sessionKey") or p.get("session_key") or "").strip()
+
+    # 1) runId 绑定优先
+    run_map = stream_run_subscribers.get(device_id, {})
+    if run_id and run_id in run_map:
+        targets = set(run_map.get(run_id, set())) & online
+        if targets:
+            return targets
+
+    # 2) sessionKey 路由
+    if session_key:
+        session_map = stream_client_sessions.get(device_id, {})
+        targets = {ws for ws in online if session_key in session_map.get(ws, set())}
+        if targets:
+            if run_id:
+                _bind_run_clients(device_id, run_id, targets, session_key=session_key)
+            return targets
+
+    # 3) runId -> sessionKey 回查
+    if run_id:
+        run_session = stream_run_sessions.get(device_id, {}).get(run_id, "")
+        if run_session:
+            session_map = stream_client_sessions.get(device_id, {})
+            targets = {ws for ws in online if run_session in session_map.get(ws, set())}
+            if targets:
+                _bind_run_clients(device_id, run_id, targets, session_key=run_session)
+                return targets
+
+    # 4) 无 run/session 时，优先最近发起 chat 的客户端
+    pending_map = stream_pending_clients.get(device_id, {})
+    now = time.time()
+    pending_targets = {ws for ws, exp in pending_map.items() if exp > now and ws in online}
+    if len(pending_targets) == 1:
+        only = set(pending_targets)
+        if run_id:
+            _bind_run_clients(device_id, run_id, only)
+        return only
+
+    # 5) 单连接设备兜底
+    if len(online) == 1:
+        only = set(online)
+        if run_id:
+            _bind_run_clients(device_id, run_id, only, session_key=session_key)
+        return only
+
+    logger.info(
+        "[ws_stream] drop ambiguous event device_id=%s event=%s run_id=%s session_key=%s online=%s pending=%s",
+        device_id, event_name, run_id or "-", session_key or "-", len(online), len(pending_targets),
+    )
+    return set()
+
+
+async def _broadcast_stream_clients(device_id: str, message: dict, targets: Set[FWS] | None = None):
+    clients = set(targets or set()) if targets is not None else set(stream_clients.get(device_id, set()))
     if not clients:
         return
     raw = json.dumps(message, ensure_ascii=False)
@@ -163,13 +298,8 @@ async def _broadcast_stream_clients(device_id: str, message: dict):
             await client_ws.send_text(raw)
         except Exception:
             dead.append(client_ws)
-    if dead:
-        current = stream_clients.get(device_id)
-        if current:
-            for d in dead:
-                current.discard(d)
-            if not current:
-                stream_clients.pop(device_id, None)
+    for d in dead:
+        _unregister_stream_client(device_id, d)
 
 
 def _extract_message_text(message: Any) -> str:
@@ -342,13 +472,19 @@ async def proxy_websocket(websocket: WebSocket, device_id: str):
 
             request_id = response.get("request_id")
 
-            # 流式事件：透传给订阅该设备的所有客户端
+            # 流式事件：按 run/session 定向推送（不再设备级广播）
             if "stream_event" in response:
+                route_payload = {"request_id": request_id}
+                se = response.get("stream_event")
+                if isinstance(se, dict):
+                    route_payload["runId"] = se.get("runId") or se.get("run_id") or se.get("request_id")
+                    route_payload["sessionKey"] = se.get("sessionKey") or se.get("session_key")
+                targets = _resolve_stream_targets(device_id, "stream_event", route_payload)
                 await _broadcast_stream_clients(device_id, {
                     "type": "stream",
                     "request_id": request_id,
                     "event": response["stream_event"],
-                })
+                }, targets=targets)
                 continue
 
             # 新版 OpenClaw Gateway event：agent/chat
@@ -356,8 +492,13 @@ async def proxy_websocket(websocket: WebSocket, device_id: str):
             if event_name in ("agent", "chat"):
                 payload = response.get("payload") or {}
                 converted = _convert_gateway_event(event_name, payload if isinstance(payload, dict) else {})
+                targets = _resolve_stream_targets(
+                    device_id,
+                    event_name,
+                    payload if isinstance(payload, dict) else {},
+                )
                 for msg in converted:
-                    await _broadcast_stream_clients(device_id, msg)
+                    await _broadcast_stream_clients(device_id, msg, targets=targets)
                 if converted:
                     continue
 
@@ -380,13 +521,7 @@ async def proxy_websocket(websocket: WebSocket, device_id: str):
                         list(response.keys()) if isinstance(response, dict) else [],
                         type(resp_data).__name__,
                     )
-                # 推理完成时也通知流式客户端
-                if isinstance(resp_data, dict) and resp_data.get("done"):
-                    await _broadcast_stream_clients(device_id, {
-                        "type": "stream_end",
-                        "request_id": request_id,
-                        "data": resp_data,
-                    })
+                # 不再按设备广播 done 响应，避免同设备多会话串流/重复回复
                 await manager.handle_response(request_id, resp_data)
             else:
                 logger.info(
@@ -455,9 +590,7 @@ async def stream_websocket(
     logger.info("[ws_stream] authed user_id=%s device_id=%s", user_id, device_id)
     # ── 鉴权结束 ───────────────────────────────────────────────
 
-    if device_id not in stream_clients:
-        stream_clients[device_id] = set()
-    stream_clients[device_id].add(websocket)
+    _register_stream_client(device_id, websocket)
 
     # sessionKey 稳定默认值：agent:main:{user_id}（每个用户独立，不随机）
     default_session_key = f"agent:main:{user_id}"
@@ -502,6 +635,8 @@ async def stream_websocket(
                 idempotency_key = (
                     req_params.get("idempotencyKey") if is_chat_req else msg.get("idempotencyKey")
                 ) or uuid.uuid4().hex
+                _bind_client_session(device_id, websocket, session_key)
+                _mark_client_pending(device_id, websocket)
 
                 if not manager.is_connected(device_id):
                     err_obj = {"type": "error", "error": "Device not connected"}
@@ -542,6 +677,12 @@ async def stream_websocket(
                     )
                     resp_data = resp.get("data") if isinstance(resp, dict) else resp
                     done_flag = bool(resp_data.get("done")) if isinstance(resp_data, dict) else False
+                    run_id_from_resp = (
+                        str(resp_data.get("runId") or resp_data.get("run_id") or "").strip()
+                        if isinstance(resp_data, dict) else ""
+                    )
+                    if run_id_from_resp:
+                        _bind_run_clients(device_id, run_id_from_resp, {websocket}, session_key=session_key)
                     if isinstance(resp_data, dict):
                         logger.info(
                             "[ws_stream] chat.send response user_id=%s device_id=%s keys=%s done=%s",
@@ -669,9 +810,7 @@ async def stream_websocket(
     except Exception:
         logger.exception("[ws_stream] error user_id=%s device_id=%s", user_id, device_id)
     finally:
-        stream_clients.get(device_id, set()).discard(websocket)
-        if device_id in stream_clients and not stream_clients[device_id]:
-            del stream_clients[device_id]
+        _unregister_stream_client(device_id, websocket)
 
 # 系统接口
 @app.get("/health")
