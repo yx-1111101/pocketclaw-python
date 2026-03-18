@@ -43,6 +43,7 @@ async def session_usage(device_id: str, session_key: str, request: Request):
 class SessionPatchRequest(BaseModel):
     label: Optional[str] = None
     pinned: Optional[bool] = None
+    model: Optional[str] = None
 
 
 @router.patch("/{device_id}/sessions/{session_key}")

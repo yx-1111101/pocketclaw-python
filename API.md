@@ -257,6 +257,25 @@ Authorization: Bearer <auth_token>
 
 ---
 
+### GET /devices/{device_id}/models
+获取设备可用模型列表（通过设备 Gateway WS `models.list`）。
+
+**响应**
+```json
+{
+  "success": true,
+  "models": [
+    {
+      "id": "minimax/MiniMax-M2.5",
+      "name": "MiniMax M2.5",
+      "provider": "minimax",
+      "contextWindow": 200000,
+      "capabilities": ["text"]
+    }
+  ]
+}
+```
+
 ## 错误格式
 
 ```json
