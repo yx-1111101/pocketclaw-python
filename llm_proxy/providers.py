@@ -125,7 +125,7 @@ def setup_debug_logger():
 
     return logger
 
-def log_request_response(logger, method, url, headers, payload, response=None, error=None):
+def log_request_response(logger, method, url, headers, payload, response=None, error=None, is_streaming=False):
     """Log full request and response details"""
     timestamp = datetime.now().isoformat()
 
@@ -141,8 +141,16 @@ def log_request_response(logger, method, url, headers, payload, response=None, e
         log_data.update({
             "response_status": response.status_code,
             "response_headers": dict(response.headers),
-            "response_body": response.text if hasattr(response, 'text') else str(response)
         })
+
+        # For streaming responses, don't try to access the body
+        if is_streaming:
+            log_data["response_body"] = "[STREAMING - body not captured]"
+        else:
+            try:
+                log_data["response_body"] = response.text if hasattr(response, 'text') else str(response)
+            except Exception as e:
+                log_data["response_body"] = f"[ERROR reading response body: {e}]"
 
     if error is not None:
         log_data["error"] = str(error)
@@ -232,7 +240,7 @@ class OpenAIProvider:
                 ) as response:
                     # Log request and initial response
                     log_request_response(
-                        self.logger, "POST", url, headers, payload, response=response
+                        self.logger, "POST", url, headers, payload, response=response, is_streaming=True
                     )
 
                     response.raise_for_status()
