@@ -1,6 +1,5 @@
 """网关代理 API 路由"""
 import json
-import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request
@@ -169,41 +168,6 @@ async def _gateway_proxy_impl(device_id: str, path: str, request: Request):
         return result
     except HTTPException:
         raise
-
-
-@router.post("/{device_id}/chat")
-async def device_chat(device_id: str, request: Request):
-    """
-    chat.send 语义的对话接口（非流式）。
-    请求体: { "message": "...", "sessionKey": "agent:main:main", "attachments": [...] }
-    响应:   { "status": "success", "data": { "content": "...", "choices": [...] } }
-    """
-    db = get_db()
-    await _require_user_device(db, request, device_id)
-    body = await request.body()
-    try:
-        data = json.loads(body) if body else {}
-    except Exception:
-        data = {}
-
-    message = data.get("message", "")
-    session_key = data.get("sessionKey", "agent:main:main")
-    idempotency_key = data.get("idempotencyKey") or f"http-{uuid.uuid4().hex[:8]}"
-
-    params: dict = {
-        "message": message,
-        "sessionKey": session_key,
-        "idempotencyKey": idempotency_key,
-    }
-    if data.get("attachments"):
-        params["attachments"] = data["attachments"]
-
-    return await manager.send_request(
-        device_id,
-        "chat.send",
-        params,
-        timeout=180.0,
-    )
 
 
 @router.get("/{device_id}/gateway/{path:path}")
