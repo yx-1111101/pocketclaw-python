@@ -231,6 +231,28 @@ def _convert_gateway_event(event_name: str, payload: dict) -> List[dict]:
     return out
 
 
+def _extract_chat_text(payload: Any) -> str:
+    """尽量从常见返回结构中提取最终文本。"""
+    if isinstance(payload, str):
+        return payload
+    if not isinstance(payload, dict):
+        return ""
+
+    text = payload.get("text") or payload.get("content") or payload.get("message")
+    if isinstance(text, str) and text.strip():
+        return text
+
+    choices = payload.get("choices")
+    if isinstance(choices, list) and choices:
+        first = choices[0] if isinstance(choices[0], dict) else {}
+        msg = first.get("message") if isinstance(first, dict) else {}
+        if isinstance(msg, dict):
+            c = msg.get("content")
+            if isinstance(c, str) and c.strip():
+                return c
+    return ""
+
+
 # 设备端反向代理 WebSocket
 @app.websocket("/proxy/{device_id}")
 async def proxy_websocket(websocket: WebSocket, device_id: str):
@@ -271,6 +293,22 @@ async def proxy_websocket(websocket: WebSocket, device_id: str):
             # 普通 RPC 响应
             if request_id:
                 resp_data = response.get("data", {})
+                if isinstance(resp_data, dict):
+                    logger.info(
+                        "[ws_proxy] rpc response device_id=%s request_id=%s keys=%s data_keys=%s",
+                        device_id,
+                        request_id,
+                        list(response.keys()),
+                        list(resp_data.keys()),
+                    )
+                else:
+                    logger.info(
+                        "[ws_proxy] rpc response device_id=%s request_id=%s keys=%s data_type=%s",
+                        device_id,
+                        request_id,
+                        list(response.keys()) if isinstance(response, dict) else [],
+                        type(resp_data).__name__,
+                    )
                 # 推理完成时也通知流式客户端
                 if isinstance(resp_data, dict) and resp_data.get("done"):
                     await _broadcast_stream_clients(device_id, {
@@ -415,21 +453,60 @@ async def stream_websocket(
 
                 try:
                     # 优先使用对话 RPC：chat.send
-                    params = {"sessionKey": session_key, "message": message, "idempotencyKey": idempotency_key}
+                    params = {
+                        "sessionKey": session_key,
+                        "message": message,
+                        "idempotencyKey": idempotency_key,
+                        "stream": True,
+                    }
                     if attachments:
                         params["attachments"] = attachments
                     if model:
                         params["model"] = model
-                    await manager.send_request(
+                    resp = await manager.send_request(
                         device_id,
                         "chat.send",
                         params,
                         timeout=30.0,
                     )
+                    resp_data = resp.get("data") if isinstance(resp, dict) else resp
+                    if isinstance(resp_data, dict):
+                        logger.info(
+                            "[ws_stream] chat.send response user_id=%s device_id=%s keys=%s",
+                            user_id, device_id, list(resp_data.keys()),
+                        )
+                    else:
+                        logger.info(
+                            "[ws_stream] chat.send response user_id=%s device_id=%s type=%s",
+                            user_id, device_id, type(resp_data).__name__,
+                        )
+
                     logger.info(
                         "[ws_stream] dispatched chat.send user_id=%s device_id=%s session=%s",
                         user_id, device_id, session_key,
                     )
+
+                    # 兜底：若设备直接同步返回最终文本而没有后续 stream 事件，直接回 stream_end 给客户端
+                    final_text = _extract_chat_text(resp_data)
+                    if final_text:
+                        request_id = (
+                            (resp_data.get("runId") if isinstance(resp_data, dict) else None)
+                            or (resp_data.get("run_id") if isinstance(resp_data, dict) else None)
+                            or uuid.uuid4().hex
+                        )
+                        await websocket.send_text(json.dumps({
+                            "type": "stream_end",
+                            "request_id": request_id,
+                            "data": {
+                                "content": final_text,
+                                "toolCalls": (
+                                    resp_data.get("tool_calls")
+                                    if isinstance(resp_data, dict) and isinstance(resp_data.get("tool_calls"), list)
+                                    else []
+                                ),
+                            },
+                        }, ensure_ascii=False))
+
                     if is_chat_req and req_id:
                         await websocket.send_text(json.dumps({
                             "type": "res",
