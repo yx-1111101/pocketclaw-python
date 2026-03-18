@@ -112,7 +112,7 @@ class ConnectionManager:
             await websocket.send_text(json.dumps(payload))
             result = await asyncio.wait_for(future, timeout=timeout)
             logger.info("[ws_manager] recv request_id=%s device_id=%s", request_id, device_id)
-            return {"status": "success", "data": result}
+            return {"status": "success", "request_id": request_id, "data": result}
         except asyncio.TimeoutError:
             self.pending_requests.pop(request_id, None)
             from fastapi import HTTPException

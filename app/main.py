@@ -368,6 +368,18 @@ def _convert_gateway_event(event_name: str, payload: dict) -> List[dict]:
                 "error": (data.get("message") if isinstance(data, dict) else None) or p.get("errorMessage") or "gateway error",
             })
             return out
+        if stream == "lifecycle" and phase in ("error", "failed"):
+            out.append({
+                "type": "error",
+                "request_id": run_id,
+                "error": (
+                    (data.get("error") if isinstance(data, dict) else None)
+                    or (data.get("message") if isinstance(data, dict) else None)
+                    or p.get("errorMessage")
+                    or "agent lifecycle error"
+                ),
+            })
+            return out
         if stream == "lifecycle" and phase == "end":
             out.append({
                 "type": "stream_end",
@@ -692,6 +704,10 @@ async def stream_websocket(
                         params,
                         timeout=120.0,
                     )
+                    rpc_request_id = (
+                        str(resp.get("request_id") or "").strip()
+                        if isinstance(resp, dict) else ""
+                    )
                     resp_data = resp.get("data") if isinstance(resp, dict) else resp
                     done_flag = bool(resp_data.get("done")) if isinstance(resp_data, dict) else False
                     run_id_from_resp = (
@@ -712,15 +728,16 @@ async def stream_websocket(
                         )
 
                     logger.info(
-                        "[ws_stream] dispatched chat.send user_id=%s device_id=%s session=%s",
-                        user_id, device_id, session_key,
+                        "[ws_stream] dispatched chat.send user_id=%s device_id=%s session=%s rpc_request_id=%s",
+                        user_id, device_id, session_key, rpc_request_id or "-",
                     )
 
                     # 兜底：若设备直接同步返回结果而没有后续 stream 事件，直接回 stream_end 给客户端
                     final_text = _extract_chat_text(resp_data)
                     if final_text or done_flag:
                         request_id = (
-                            (resp_data.get("runId") if isinstance(resp_data, dict) else None)
+                            (rpc_request_id or None)
+                            or (resp_data.get("runId") if isinstance(resp_data, dict) else None)
                             or (resp_data.get("run_id") if isinstance(resp_data, dict) else None)
                             or uuid.uuid4().hex
                         )
