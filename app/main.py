@@ -355,34 +355,57 @@ async def stream_websocket(
 
     try:
         while True:
-            raw = await websocket.receive_text()
+            try:
+                raw = await websocket.receive_text()
+            except RuntimeError as e:
+                # 某些断连时机下，Starlette 可能抛出 RuntimeError（而非 WebSocketDisconnect）
+                # 这里按正常断连处理，避免刷 ERROR 误导排障。
+                text = str(e)
+                if "not connected" in text.lower() or "accept first" in text.lower():
+                    logger.info("[ws_stream] runtime disconnect user_id=%s device_id=%s err=%s", user_id, device_id, text)
+                    break
+                raise
             try:
                 msg = json.loads(raw)
             except Exception:
                 continue
 
             action = msg.get("action")
+            msg_type = msg.get("type")
+            method = msg.get("method")
+            req_id = str(msg.get("id") or "")
+            req_params = msg.get("params") if isinstance(msg.get("params"), dict) else {}
 
-            if action == "chat":
-                message = msg.get("message", "")
+            is_chat_action = action == "chat"
+            is_chat_req = (msg_type == "req" and method == "chat.send")
+
+            if is_chat_action or is_chat_req:
+                message = req_params.get("message", "") if is_chat_req else msg.get("message", "")
                 # 优先使用客户端传入的 sessionKey，否则用稳定默认值
-                session_key = msg.get("sessionKey") or default_session_key
-                attachments = msg.get("attachments")
-                model = msg.get("model")
-                idempotency_key = msg.get("idempotencyKey") or uuid.uuid4().hex
+                session_key = (req_params.get("sessionKey") if is_chat_req else msg.get("sessionKey")) or default_session_key
+                attachments = req_params.get("attachments") if is_chat_req else msg.get("attachments")
+                model = req_params.get("model") if is_chat_req else msg.get("model")
+                idempotency_key = (
+                    req_params.get("idempotencyKey") if is_chat_req else msg.get("idempotencyKey")
+                ) or uuid.uuid4().hex
 
                 if not manager.is_connected(device_id):
-                    await websocket.send_text(json.dumps({
-                        "type": "error",
-                        "error": "Device not connected",
-                    }))
+                    err_obj = {"type": "error", "error": "Device not connected"}
+                    if is_chat_req and req_id:
+                        err_obj = {"type": "res", "id": req_id, "ok": False, "error": "Device not connected"}
+                    await websocket.send_text(json.dumps(err_obj, ensure_ascii=False))
                     continue
 
                 if not message and not attachments:
-                    await websocket.send_text(json.dumps({
-                        "type": "error",
-                        "error": "message and attachments cannot both be empty",
-                    }))
+                    err_obj = {"type": "error", "error": "message and attachments cannot both be empty"}
+                    if is_chat_req and req_id:
+                        err_obj = {
+                            "type": "res",
+                            "id": req_id,
+                            "ok": False,
+                            "error": "message and attachments cannot both be empty",
+                        }
+                    await websocket.send_text(json.dumps(err_obj, ensure_ascii=False))
                     continue
 
                 try:
@@ -398,6 +421,13 @@ async def stream_websocket(
                         params,
                         timeout=30.0,
                     )
+                    if is_chat_req and req_id:
+                        await websocket.send_text(json.dumps({
+                            "type": "res",
+                            "id": req_id,
+                            "ok": True,
+                            "payload": {"accepted": True},
+                        }, ensure_ascii=False))
                 except Exception as e:
                     # 兼容旧设备：降级到 HTTP 风格 chat/completions
                     logger.warning("[ws_stream] chat.send failed, fallback to v1/chat/completions: %s", e)
@@ -418,13 +448,43 @@ async def stream_websocket(
                             method="POST",
                             timeout=180.0,
                         )
+                        if is_chat_req and req_id:
+                            await websocket.send_text(json.dumps({
+                                "type": "res",
+                                "id": req_id,
+                                "ok": True,
+                                "payload": {"accepted": True, "fallback": True},
+                            }, ensure_ascii=False))
                     except Exception as e2:
-                        await websocket.send_text(json.dumps({
-                            "type": "error",
-                            "error": str(e2),
-                        }))
-            elif action == "ping":
-                await websocket.send_text(json.dumps({"type": "pong"}))
+                        if is_chat_req and req_id:
+                            await websocket.send_text(json.dumps({
+                                "type": "res",
+                                "id": req_id,
+                                "ok": False,
+                                "error": str(e2),
+                            }, ensure_ascii=False))
+                        else:
+                            await websocket.send_text(json.dumps({
+                                "type": "error",
+                                "error": str(e2),
+                            }, ensure_ascii=False))
+            elif action == "ping" or (msg_type == "req" and method == "ping"):
+                if msg_type == "req" and req_id:
+                    await websocket.send_text(json.dumps({
+                        "type": "res",
+                        "id": req_id,
+                        "ok": True,
+                        "payload": {"pong": True},
+                    }, ensure_ascii=False))
+                else:
+                    await websocket.send_text(json.dumps({"type": "pong"}, ensure_ascii=False))
+            elif msg_type == "req" and req_id:
+                await websocket.send_text(json.dumps({
+                    "type": "res",
+                    "id": req_id,
+                    "ok": False,
+                    "error": f"unsupported method: {method or action or ''}",
+                }, ensure_ascii=False))
 
     except WebSocketDisconnect:
         logger.info("[ws_stream] disconnect user_id=%s device_id=%s", user_id, device_id)

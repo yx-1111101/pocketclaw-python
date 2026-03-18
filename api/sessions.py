@@ -15,19 +15,23 @@ async def list_agents(device_id: str, request: Request):
     """获取设备上的 Agent 列表（agents.list RPC）"""
     db = get_db()
     await _require_user_device(db, request, device_id)
+    if not manager.is_connected(device_id):
+        return {"success": True, "agents": [{"id": "main", "name": "main", "isDefault": True}], "degraded": "device_offline"}
     try:
-        result = await manager.send_request(device_id, "agents.list", {}, timeout=15.0)
+        result = await manager.send_request(device_id, "agents.list", {}, timeout=6.0)
         payload = result.get("data") or {}
         agents = payload.get("agents") or []
         # 若设备返回空，至少给出默认 main agent
         if not agents:
             agents = [{"id": "main", "name": "main", "isDefault": True}]
         return {"success": True, "agents": agents}
-    except HTTPException:
+    except HTTPException as e:
+        if e.status_code in (404, 504):
+            return {"success": True, "agents": [{"id": "main", "name": "main", "isDefault": True}], "degraded": f"http_{e.status_code}"}
         raise
     except Exception as e:
         # agents.list 失败时降级返回默认 agent，不影响正常聊天
-        return {"success": True, "agents": [{"id": "main", "name": "main", "isDefault": True}]}
+        return {"success": True, "agents": [{"id": "main", "name": "main", "isDefault": True}], "degraded": "exception"}
 
 
 @router.get("/{device_id}/sessions")
@@ -42,14 +46,18 @@ async def list_sessions(
     params: dict = {}
     if agentId:
         params["agentId"] = agentId
+    if not manager.is_connected(device_id):
+        return {"success": True, "sessions": [], "degraded": "device_offline"}
     try:
-        result = await manager.send_request(device_id, "sessions.list", params)
+        result = await manager.send_request(device_id, "sessions.list", params, timeout=8.0)
         payload = result.get("data") or {}
         return {"success": True, "sessions": payload.get("sessions", [])}
-    except HTTPException:
+    except HTTPException as e:
+        if e.status_code in (404, 504):
+            return {"success": True, "sessions": [], "degraded": f"http_{e.status_code}"}
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return {"success": True, "sessions": [], "degraded": "exception"}
 
 
 @router.get("/{device_id}/sessions/{session_key}/usage")
@@ -129,14 +137,18 @@ async def get_chat_history(
     params: dict = {"limit": limit}
     if sessionKey:
         params["sessionKey"] = sessionKey
+    if not manager.is_connected(device_id):
+        return {"success": True, "messages": [], "sessionKey": sessionKey, "degraded": "device_offline"}
     try:
-        result = await manager.send_request(device_id, "chat.history", params)
+        result = await manager.send_request(device_id, "chat.history", params, timeout=8.0)
         payload = result.get("data") or {}
         return {"success": True, "messages": payload.get("messages", []), "sessionKey": payload.get("sessionKey")}
-    except HTTPException:
+    except HTTPException as e:
+        if e.status_code in (404, 504):
+            return {"success": True, "messages": [], "sessionKey": sessionKey, "degraded": f"http_{e.status_code}"}
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return {"success": True, "messages": [], "sessionKey": sessionKey, "degraded": "exception"}
 
 
 # ── chat.abort ──────────────────────────────────────────────────────────────
