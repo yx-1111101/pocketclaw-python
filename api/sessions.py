@@ -68,6 +68,7 @@ async def session_usage(device_id: str, session_key: str, request: Request):
 
 
 class SessionPatchRequest(BaseModel):
+    name: Optional[str] = None
     label: Optional[str] = None
     pinned: Optional[bool] = None
     model: Optional[str] = None
@@ -79,10 +80,18 @@ async def patch_session(device_id: str, session_key: str, body: SessionPatchRequ
     db = get_db()
     await _require_user_device(db, request, device_id)
     patch = {k: v for k, v in body.dict().items() if v is not None}
+    if "label" in patch and "name" not in patch:
+        patch["name"] = patch.pop("label")
+    else:
+        patch.pop("label", None)
     if not patch:
         raise HTTPException(status_code=400, detail="没有要更新的字段")
     try:
-        result = await manager.send_request(device_id, "sessions.patch", {"sessionKey": session_key, "patch": patch})
+        result = await manager.send_request(
+            device_id,
+            "sessions.patch",
+            {"key": session_key, "sessionKey": session_key, "patch": patch},
+        )
         payload = result.get("data") or {}
         return {"success": True, "session": payload.get("session", {})}
     except HTTPException:

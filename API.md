@@ -276,6 +276,52 @@ Authorization: Bearer <auth_token>
 }
 ```
 
+---
+
+### GET /devices/{device_id}/model-configs
+统一获取模型管理数据（云端 API，后端转发 Gateway `models.list` + `config.get`）。
+
+**响应**
+```json
+{
+  "success": true,
+  "active_model": "glm-4.7",
+  "models": [
+    { "id": "glm-4.7", "name": "glm-4.7", "provider": "local" }
+  ],
+  "providers": [
+    {
+      "provider": "openai",
+      "label": "OpenAI",
+      "has_key": true,
+      "api_key_masked": "sk-**********ab"
+    }
+  ]
+}
+```
+
+### POST /devices/{device_id}/model-configs/{provider}/apikey
+设置指定 provider 的 API Key（后端转发 Gateway `config.patch`）。
+
+**请求**
+```json
+{ "api_key": "your_api_key" }
+```
+
+### DELETE /devices/{device_id}/model-configs/{provider}/apikey
+删除指定 provider 的 API Key（后端转发 Gateway `config.patch`，字段置 `null`）。
+
+### POST /devices/{device_id}/model-configs/active
+设置默认模型（后端转发 Gateway `config.patch`），可选同步更新某个会话模型。
+
+**请求**
+```json
+{
+  "model_id": "glm-4.7",
+  "session_key": "agent:main:main"
+}
+```
+
 ## 错误格式
 
 ```json

@@ -14,8 +14,14 @@ async def list_models(device_id: str, request: Request):
     db = get_db()
     await _require_user_device(db, request, device_id)
     try:
-        result = await manager.send_request(device_id, "models.list", {})
+        result = await manager.send_request(device_id, "models.list", {"includeAll": True})
         payload = result.get("data") or {}
+        if isinstance(payload, dict) and isinstance(payload.get("payload"), dict):
+            payload = payload.get("payload")
+        if isinstance(payload, dict) and isinstance(payload.get("result"), dict):
+            payload = payload.get("result")
+        if isinstance(payload, dict) and payload.get("ok") is False:
+            raise HTTPException(status_code=502, detail=f"models.list failed: {payload.get('error')}")
         return {"success": True, "models": payload.get("models", [])}
     except HTTPException:
         raise

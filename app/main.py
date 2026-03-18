@@ -5,7 +5,7 @@ import logging
 import time
 import uuid
 from pathlib import Path
-from typing import Dict, Set
+from typing import Any, Dict, List, Set
 from fastapi import FastAPI, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi import WebSocket as FWS
 from fastapi.responses import JSONResponse, FileResponse
@@ -17,7 +17,7 @@ from app.core.security import parse_auth_token, parse_user_from_auth_header
 from app.core.supabase import get_db, init_db
 from app.core.redis_cache import init_cache
 from app.core.websocket import manager
-from api import device, wechat, proxy, cron, skills, sessions, models
+from api import device, wechat, proxy, cron, skills, sessions, models, model_configs
 
 # 初始化 Supabase（持久化存储）和 Redis（缓存）
 init_db(SUPABASE_URL, SUPABASE_KEY)
@@ -44,6 +44,7 @@ app.include_router(cron.router)
 app.include_router(skills.router)
 app.include_router(sessions.router)
 app.include_router(models.router)
+app.include_router(model_configs.router)
 
 
 def _truncate_text(text: str, limit: int = 2000) -> str:
@@ -150,6 +151,86 @@ async def upsert_device_presence(device_id: str):
 stream_clients: Dict[str, Set[FWS]] = {}
 
 
+async def _broadcast_stream_clients(device_id: str, message: dict):
+    clients = stream_clients.get(device_id, set())
+    if not clients:
+        return
+    raw = json.dumps(message, ensure_ascii=False)
+    dead = []
+    for client_ws in clients:
+        try:
+            await client_ws.send_text(raw)
+        except Exception:
+            dead.append(client_ws)
+    for d in dead:
+        clients.discard(d)
+
+
+def _convert_gateway_event(event_name: str, payload: dict) -> List[dict]:
+    """将 Gateway 的 event/payload 统一转成小程序 stream 协议。"""
+    p = payload if isinstance(payload, dict) else {}
+    run_id = p.get("runId") or p.get("run_id") or p.get("request_id") or ""
+    out: List[dict] = []
+
+    if event_name == "agent":
+        stream = p.get("stream") or p.get("type") or ""
+        data = p.get("data") or {}
+        phase = p.get("phase") or (data.get("phase") if isinstance(data, dict) else None)
+        if stream == "error":
+            out.append({
+                "type": "error",
+                "request_id": run_id,
+                "error": (data.get("message") if isinstance(data, dict) else None) or p.get("errorMessage") or "gateway error",
+            })
+            return out
+        if stream == "lifecycle" and phase == "end":
+            out.append({
+                "type": "stream_end",
+                "request_id": run_id,
+                "data": {
+                    "content": (data.get("text") if isinstance(data, dict) else "") or "",
+                    "toolCalls": (data.get("tool_calls") if isinstance(data, dict) and isinstance(data.get("tool_calls"), list) else []),
+                },
+            })
+            return out
+        if stream:
+            out.append({
+                "type": "stream",
+                "request_id": run_id,
+                "event": {"type": stream, "data": data if isinstance(data, dict) else {}},
+            })
+            return out
+
+    if event_name == "chat":
+        state = p.get("state") or ""
+        if state == "error":
+            out.append({
+                "type": "error",
+                "request_id": run_id,
+                "error": p.get("errorMessage") or "chat error",
+            })
+            return out
+        if state == "streaming" and p.get("delta"):
+            out.append({
+                "type": "stream",
+                "request_id": run_id,
+                "event": {"type": "text", "data": {"delta": p.get("delta")}},
+            })
+            return out
+        if state == "final":
+            out.append({
+                "type": "stream_end",
+                "request_id": run_id,
+                "data": {
+                    "content": p.get("text") or p.get("content") or "",
+                    "toolCalls": p.get("tool_calls") if isinstance(p.get("tool_calls"), list) else [],
+                },
+            })
+            return out
+
+    return out
+
+
 # 设备端反向代理 WebSocket
 @app.websocket("/proxy/{device_id}")
 async def proxy_websocket(websocket: WebSocket, device_id: str):
@@ -170,41 +251,33 @@ async def proxy_websocket(websocket: WebSocket, device_id: str):
 
             # 流式事件：透传给订阅该设备的所有客户端
             if "stream_event" in response:
-                clients = stream_clients.get(device_id, set())
-                msg = json.dumps({
+                await _broadcast_stream_clients(device_id, {
                     "type": "stream",
                     "request_id": request_id,
                     "event": response["stream_event"],
                 })
-                dead = []
-                for client_ws in clients:
-                    try:
-                        await client_ws.send_text(msg)
-                    except Exception:
-                        dead.append(client_ws)
-                for d in dead:
-                    clients.discard(d)
                 continue
+
+            # 新版 OpenClaw Gateway event：agent/chat
+            event_name = response.get("event") if isinstance(response, dict) else None
+            if event_name in ("agent", "chat"):
+                payload = response.get("payload") or {}
+                converted = _convert_gateway_event(event_name, payload if isinstance(payload, dict) else {})
+                for msg in converted:
+                    await _broadcast_stream_clients(device_id, msg)
+                if converted:
+                    continue
 
             # 普通 RPC 响应
             if request_id:
                 resp_data = response.get("data", {})
                 # 推理完成时也通知流式客户端
                 if isinstance(resp_data, dict) and resp_data.get("done"):
-                    clients = stream_clients.get(device_id, set())
-                    msg = json.dumps({
+                    await _broadcast_stream_clients(device_id, {
                         "type": "stream_end",
                         "request_id": request_id,
                         "data": resp_data,
                     })
-                    dead = []
-                    for client_ws in clients:
-                        try:
-                            await client_ws.send_text(msg)
-                        except Exception:
-                            dead.append(client_ws)
-                    for d in dead:
-                        clients.discard(d)
                 await manager.handle_response(request_id, resp_data)
             else:
                 logger.info(
@@ -295,6 +368,8 @@ async def stream_websocket(
                 # 优先使用客户端传入的 sessionKey，否则用稳定默认值
                 session_key = msg.get("sessionKey") or default_session_key
                 attachments = msg.get("attachments")
+                model = msg.get("model")
+                idempotency_key = msg.get("idempotencyKey") or uuid.uuid4().hex
 
                 if not manager.is_connected(device_id):
                     await websocket.send_text(json.dumps({
@@ -303,26 +378,51 @@ async def stream_websocket(
                     }))
                     continue
 
-                try:
-                    params = {
-                        "messages": [{"role": "user", "content": message}],
-                        "sessionKey": session_key,
-                        "_stream": True,
-                    }
-                    if attachments:
-                        params["attachments"] = attachments
-                    await manager.send_request(
-                        device_id,
-                        "v1/chat/completions",
-                        params,
-                        method="POST",
-                        timeout=180.0,
-                    )
-                except Exception as e:
+                if not message and not attachments:
                     await websocket.send_text(json.dumps({
                         "type": "error",
-                        "error": str(e),
+                        "error": "message and attachments cannot both be empty",
                     }))
+                    continue
+
+                try:
+                    # 优先使用对话 RPC：chat.send
+                    params = {"sessionKey": session_key, "message": message, "idempotencyKey": idempotency_key}
+                    if attachments:
+                        params["attachments"] = attachments
+                    if model:
+                        params["model"] = model
+                    await manager.send_request(
+                        device_id,
+                        "chat.send",
+                        params,
+                        timeout=30.0,
+                    )
+                except Exception as e:
+                    # 兼容旧设备：降级到 HTTP 风格 chat/completions
+                    logger.warning("[ws_stream] chat.send failed, fallback to v1/chat/completions: %s", e)
+                    try:
+                        fallback = {
+                            "messages": [{"role": "user", "content": message or " "}],
+                            "sessionKey": session_key,
+                            "_stream": True,
+                        }
+                        if attachments:
+                            fallback["attachments"] = attachments
+                        if model:
+                            fallback["model"] = model
+                        await manager.send_request(
+                            device_id,
+                            "v1/chat/completions",
+                            fallback,
+                            method="POST",
+                            timeout=180.0,
+                        )
+                    except Exception as e2:
+                        await websocket.send_text(json.dumps({
+                            "type": "error",
+                            "error": str(e2),
+                        }))
             elif action == "ping":
                 await websocket.send_text(json.dumps({"type": "pong"}))
 
