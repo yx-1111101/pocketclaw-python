@@ -304,17 +304,16 @@ async def stream_websocket(
 
                 try:
                     params = {
-                        "messages": [{"role": "user", "content": message}],
+                        "message": message,
                         "sessionKey": session_key,
-                        "_stream": True,
+                        "idempotencyKey": f"ws-{uuid.uuid4().hex[:8]}",
                     }
                     if attachments:
                         params["attachments"] = attachments
                     await manager.send_request(
                         device_id,
-                        "v1/chat/completions",
+                        "chat.send",
                         params,
-                        method="POST",
                         timeout=180.0,
                     )
                 except Exception as e:
