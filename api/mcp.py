@@ -8,7 +8,7 @@ from datetime import datetime
 import uuid
 import logging
 
-router = APIRouter(prefix="/mcp", tags=["mcp"])
+router = APIRouter(prefix="/tools/mcp", tags=["工具管理"])
 logger = logging.getLogger(__name__)
 
 
