@@ -70,22 +70,21 @@ async def _require_user(db, request: Request):
 
 
 async def _require_user_device(db, request: Request, device_id: str):
+    """验证用户是否有权访问设备 - 只查绑定表"""
     user = await _require_user(db, request)
-    device = await _fetch_single(db, "devices", {"device_id": device_id})
-    if not device:
-        raise HTTPException(status_code=404, detail="device not found")
-
     owner_user_id = str(user.get("user_id") or "").strip()
     if not owner_user_id:
         raise HTTPException(status_code=500, detail="用户数据异常（缺少 user_id）")
-    resolved_device_id = str(device.get("device_id") or device_id).strip()
-    if not resolved_device_id:
-        raise HTTPException(status_code=500, detail="设备数据异常（缺少 device_id）")
-
-    binding = await _fetch_single(db, "device_bindings", {"user_id": owner_user_id, "device_id": resolved_device_id})
+    
+    # 直接查绑定关系，隐含验证设备存在
+    binding = await _fetch_single(db, "device_bindings", {"user_id": owner_user_id, "device_id": device_id})
     if not binding:
         raise HTTPException(status_code=403, detail="无权访问该设备")
-    return user, device, binding
+    
+    # 设备 ID 优先用 binding 中的
+    resolved_device_id = str(binding.get("device_id") or device_id).strip()
+    
+    return user, {"device_id": resolved_device_id}, binding
 
 
 @router.get("/{device_id}/status")
