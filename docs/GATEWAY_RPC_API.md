@@ -353,40 +353,80 @@ def rpc_call(ws, method, params={}):
 {
     "skills": [
         {
-            "id": "github",
-            "name": "GitHub",
-            "status": "ready",
-            "description": "Interacts with GitHub using gh CLI"
-        },
-        {
-            "id": "weather",
-            "name": "Weather", 
-            "status": "ready",
-            "description": "Get weather forecasts"
-        },
-        {
             "id": "feishu-doc",
             "name": "飞书文档",
             "status": "ready",
-            "description": "Feishu document read/write operations"
+            "description": "Feishu document read/write operations. Activate when user mentions Feishu docs, cloud docs, or docx links.",
+            "source": "openclaw-extra"
+        },
+        {
+            "id": "feishu-drive",
+            "name": "飞书网盘",
+            "status": "ready",
+            "description": "Feishu cloud storage file management. Activate when user mentions cloud space, folders, drive.",
+            "source": "openclaw-extra"
         },
         {
             "id": "qqbot-cron",
             "name": "QQ提醒",
             "status": "ready",
-            "description": "QQ Bot 智能提醒技能"
+            "description": "QQ Bot 智能提醒技能。支持一次性提醒、周期性任务、自动降级确保送达。",
+            "source": "openclaw-extra"
+        },
+        {
+            "id": "clawhub",
+            "name": "ClawHub",
+            "status": "ready",
+            "description": "Use the ClawHub CLI to search, install, update, and publish agent skills from clawhub.com.",
+            "source": "openclaw-bundled"
+        },
+        {
+            "id": "coding-agent",
+            "name": "Coding Agent",
+            "status": "ready",
+            "description": "Delegate coding tasks to Codex, Claude Code, or Pi agents via background process.",
+            "source": "openclaw-bundled"
+        },
+        {
+            "id": "github",
+            "name": "GitHub",
+            "status": "ready",
+            "description": "Interact with GitHub using the gh CLI. Use gh issue, gh pr, gh run...",
+            "source": "openclaw-workspace"
+        },
+        {
+            "id": "weather",
+            "name": "天气",
+            "status": "ready",
+            "description": "Get current weather and forecasts (no API key required).",
+            "source": "openclaw-workspace"
+        },
+        {
+            "id": "1password",
+            "name": "1Password",
+            "status": "missing",
+            "description": "Set up and use 1Password CLI (op)...",
+            "source": "openclaw-bundled"
         }
     ],
-    "count": 23
+    "count": 64,
+    "readyCount": 23
 }
 ```
 
 **状态说明：**
 | status | 说明 |
 |--------|------|
-| ready | 可用 |
+| ready | ✅ 可用 |
 | loading | 加载中 |
-| missing | 缺少依赖 |
+| missing | ❌ 缺少依赖（未安装） |
+
+**Source 来源：**
+| source | 说明 |
+|--------|------|
+| openclaw-bundled | OpenClaw 内置 |
+| openclaw-extra | 官方扩展包 |
+| openclaw-workspace | 工作区自定义 |
 
 ---
 
@@ -502,17 +542,72 @@ def rpc_call(ws, method, params={}):
     ],
     "usage": {
         "updatedAt": 1773924075790,
-        "providers": [
-            {
-                "provider": "anthropic",
-                "displayName": "Claude",
-                "windows": [],
-                "error": "HTTP 403: OAuth token does not meet scope"
-            }
-        ]
+        "providers": [...]
     }
 }
 ```
+
+### 5.2 channels.capabilities - 频道能力详情
+
+**请求：**
+```python
+{
+    "id": "caps",
+    "function": "channels.capabilities",
+    "params": {}
+}
+```
+
+**响应：**
+```python
+{
+    "telegram": {
+        "default": {
+            "Support": "chatTypes=direct,group,channel,thread polls reactions threads media nativeCommands blockStreaming",
+            "Actions": "send, broadcast, poll, react, delete, edit, topic-create",
+            "Bot": "@yixuanclawbot (8773269994)",
+            "Flags": "joinGroups=true readAllGroupMessages=true inlineQueries=false",
+            "Webhook": "none"
+        }
+    },
+    "qqbot": {
+        "default": {
+            "Support": "chatTypes=direct,group media",
+            "Actions": "send, broadcast",
+            "Status": "not configured, enabled"
+        }
+    },
+    "wecom": {
+        "default": {
+            "Support": "chatTypes=direct,group media blockStreaming",
+            "Actions": "send, broadcast",
+            "Status": "not configured, enabled"
+        }
+    }
+}
+```
+
+**Telegram 频道支持的功能：**
+| 功能 | 说明 |
+|------|------|
+| chatTypes | direct, group, channel, thread |
+| polls | 投票 |
+| reactions | 反应 |
+| threads | 话题 |
+| media | 媒体 |
+| nativeCommands | 原生命令 |
+| blockStreaming | 阻止流式 |
+
+**Telegram 支持的操作：**
+| Action | 说明 |
+|--------|------|
+| send | 发送消息 |
+| broadcast | 广播 |
+| poll | 创建投票 |
+| react | 添加反应 |
+| delete | 删除消息 |
+| edit | 编辑消息 |
+| topic-create | 创建话题 |
 
 ---
 
@@ -611,6 +706,17 @@ def rpc_call(ws, method, params={}):
 }
 ```
 
+**Model 字段说明：**
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| key | string | 模型标识符 |
+| name | string | 显示名称 |
+| input | string | 输入类型 (text, text+image, audio) |
+| contextWindow | int | 上下文窗口大小 (tokens) |
+| local | bool | 是否本地模型 |
+| available | bool | 是否可用 |
+| tags | string[] | 标签 (default/fallback#N/configured/alias:xxx) |
+
 ---
 
 ## 七、Config 相关
@@ -708,11 +814,95 @@ def rpc_call(ws, method, params={}):
             "description": "Send a message via channel"
         },
         {
+            "id": "message_delete",
+            "name": "message.delete",
+            "description": "Delete a message"
+        },
+        {
+            "id": "message_react",
+            "name": "message.react",
+            "description": "React to a message"
+        },
+        {
+            "id": "memory_get",
+            "name": "memory.get",
+            "description": "Safe snippet read from memory"
+        },
+        {
             "id": "memory_search",
-            "name": "memory.search", 
+            "name": "memory.search",
             "description": "Search memory"
+        },
+        {
+            "id": "sessions_list",
+            "name": "sessions.list",
+            "description": "List sessions"
+        },
+        {
+            "id": "sessions_send",
+            "name": "sessions.send",
+            "description": "Send message to another session"
+        },
+        {
+            "id": "subagents",
+            "name": "subagents",
+            "description": "List, kill, or steer spawned sub-agents"
+        },
+        {
+            "id": "cron",
+            "name": "cron",
+            "description": "Manage Gateway cron jobs"
+        },
+        {
+            "id": "tts",
+            "name": "tts",
+            "description": "Convert text to speech"
+        },
+        {
+            "id": "browser",
+            "name": "browser",
+            "description": "Control browser"
+        },
+        {
+            "id": "web_fetch",
+            "name": "web.fetch",
+            "description": "Fetch and extract readable content from URL"
+        },
+        {
+            "id": "web_search",
+            "name": "web.search",
+            "description": "Search the web"
         }
-    ]
+    ],
+    "count": 45
+}
+```
+
+### 8.2 acp.invoke - 调用工具
+
+**请求：**
+```python
+{
+    "id": "invoke",
+    "function": "acp.invoke",
+    "params": {
+        "tool": "message.send",
+        "args": {
+            "channel": "telegram",
+            "target": "123456",
+            "message": "Hello!"
+        }
+    }
+}
+```
+
+**响应：**
+```python
+{
+    "ok": true,
+    "result": {
+        "messageId": "msg_xxx"
+    }
 }
 ```
 
