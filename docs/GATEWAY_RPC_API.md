@@ -356,49 +356,14 @@ def rpc_call(ws, method, params={}):
             "id": "feishu-doc",
             "name": "飞书文档",
             "status": "ready",
-            "description": "Feishu document read/write operations. Activate when user mentions Feishu docs, cloud docs, or docx links.",
+            "description": "Feishu document read/write operations...",
             "source": "openclaw-extra"
-        },
-        {
-            "id": "feishu-drive",
-            "name": "飞书网盘",
-            "status": "ready",
-            "description": "Feishu cloud storage file management. Activate when user mentions cloud space, folders, drive.",
-            "source": "openclaw-extra"
-        },
-        {
-            "id": "qqbot-cron",
-            "name": "QQ提醒",
-            "status": "ready",
-            "description": "QQ Bot 智能提醒技能。支持一次性提醒、周期性任务、自动降级确保送达。",
-            "source": "openclaw-extra"
-        },
-        {
-            "id": "clawhub",
-            "name": "ClawHub",
-            "status": "ready",
-            "description": "Use the ClawHub CLI to search, install, update, and publish agent skills from clawhub.com.",
-            "source": "openclaw-bundled"
-        },
-        {
-            "id": "coding-agent",
-            "name": "Coding Agent",
-            "status": "ready",
-            "description": "Delegate coding tasks to Codex, Claude Code, or Pi agents via background process.",
-            "source": "openclaw-bundled"
-        },
-        {
-            "id": "github",
-            "name": "GitHub",
-            "status": "ready",
-            "description": "Interact with GitHub using the gh CLI. Use gh issue, gh pr, gh run...",
-            "source": "openclaw-workspace"
         },
         {
             "id": "weather",
             "name": "天气",
             "status": "ready",
-            "description": "Get current weather and forecasts (no API key required).",
+            "description": "Get current weather and forecasts...",
             "source": "openclaw-workspace"
         },
         {
@@ -414,12 +379,94 @@ def rpc_call(ws, method, params={}):
 }
 ```
 
+### 4.2 skills.status / skills.check - 技能状态检查
+
+**请求：**
+```python
+{
+    "id": "check",
+    "function": "skills.status",
+    "params": {}
+}
+```
+
+**响应（CLI openclaw skills check 输出）：**
+```
+Skills Status Check
+
+Total: 64
+✓ Eligible: 23
+⏸ Disabled: 0
+🚫 Blocked by allowlist: 0
+✗ Missing requirements: 41
+
+Ready to use:
+  📦 feishu-doc
+  📦 feishu-drive
+  📦 feishu-perm
+  📦 feishu-wiki
+  📦 qqbot-cron
+  📦 qqbot-media
+  📦 clawhub
+  🧩 coding-agent
+  📦 github
+  📦 healthcheck
+  📦 mcporter
+  📦 notion
+  📦 obsidian
+  📦 skill-creator
+  📦 summarize
+  📦 weather
+  📦 Agent Browser
+  📦 find-skills
+  📦 frontend-design
+  📦 skill-vetter
+  📦 supabase-postgres-best-practices
+  📦 tavily
+  📦 tencentcloud-lighthouse
+  📦 Agent Browser
+```
+
+**技能状态统计：**
+| 状态 | 说明 |
+|------|------|
+| Total | 总数 |
+| ✓ Eligible / Ready | 可用数量 |
+| ⏸ Disabled | 已禁用数量 |
+| 🚫 Blocked by allowlist | 被白名单阻止数量 |
+| ✗ Missing requirements | 缺少依赖数量 |
+
+### 4.3 skills.info - 技能详情
+
+**请求：**
+```python
+{
+    "id": "info",
+    "function": "skills.info",
+    "params": {
+        "skillId": "feishu-doc"
+    }
+}
+```
+
+**响应：**
+```
+📦 feishu-doc ✓ Ready
+
+Feishu document read/write operations. Activate when user mentions Feishu docs, cloud docs, or docx links.
+
+Details:
+  Source: openclaw-extra
+  Path: ~/.openclaw/extensions/feishu/skills/feishu-doc/SKILL.md
+```
+
 **状态说明：**
 | status | 说明 |
 |--------|------|
-| ready | ✅ 可用 |
+| ready / ✓ | ✅ 可用 |
 | loading | 加载中 |
-| missing | ❌ 缺少依赖（未安装） |
+| missing / ✗ | ❌ 缺少依赖 |
+| disabled | 已禁用 |
 
 **Source 来源：**
 | source | 说明 |
