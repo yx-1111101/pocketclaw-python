@@ -1,238 +1,129 @@
 """
-模型管理 API - 平台模型 + 自定义模型
+模型管理 API - 调用真实 Gateway RPC
 """
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
-from datetime import datetime
 import uuid
 import logging
 
+from app.core.gateway_rpc import call_gateway_rpc_sync
+
 router = APIRouter(prefix="/models", tags=["models"])
 logger = logging.getLogger(__name__)
-
-
-# 支持的平台模型
-PLATFORM_MODELS = [
-    {"id": "gpt-4o", "name": "GPT-4o", "provider": "OpenAI", "enabled": True},
-    {"id": "gpt-4o-mini", "name": "GPT-4o Mini", "provider": "OpenAI", "enabled": True},
-    {"id": "gpt-4-turbo", "name": "GPT-4 Turbo", "provider": "OpenAI", "enabled": False},
-    {"id": "claude-sonnet-4-6", "name": "Claude Sonnet 4-6", "provider": "Anthropic", "enabled": True},
-    {"id": "claude-opus-4-5", "name": "Claude Opus 4-5", "provider": "Anthropic", "enabled": False},
-    {"id": "claude-haiku-3-5", "name": "Claude Haiku 3.5", "provider": "Anthropic", "enabled": False},
-    {"id": "deepseek-chat", "name": "DeepSeek Chat", "provider": "DeepSeek", "enabled": False},
-    {"id": "deepseek-coder", "name": "DeepSeek Coder", "provider": "DeepSeek", "enabled": False},
-    {"id": "moonshot-v1", "name": "Moonshot V1", "provider": "Moonshot", "enabled": False},
-    {"id": "glm-4", "name": "GLM-4", "provider": "智谱 AI", "enabled": False},
-    {"id": "qwen-turbo", "name": "Qwen Turbo", "provider": "阿里云", "enabled": False},
-    {"id": "minimax", "name": "MiniMax", "provider": "MiniMax", "enabled": False},
-]
-
-
-# 服务商配置
-PROVIDERS = {
-    "openai": {"name": "OpenAI", "baseUrl": "https://api.openai.com/v1"},
-    "anthropic": {"name": "Anthropic", "baseUrl": "https://api.anthropic.com"},
-    "deepseek": {"name": "DeepSeek", "baseUrl": "https://api.deepseek.com/v1"},
-    "moonshot": {"name": "Moonshot", "baseUrl": "https://api.moonshot.cn/v1"},
-    "zhipu": {"name": "智谱 AI", "baseUrl": "https://open.bigmodel.cn/api/paas/v4"},
-    "qianwen": {"name": "阿里云", "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1"},
-    "minimax": {"name": "MiniMax", "baseUrl": "https://api.minimax.chat/v1"},
-}
-
-
-class CustomModel(BaseModel):
-    """自定义模型"""
-    id: str
-    name: str
-    provider: str
-    providerName: str
-    apiKey: str
-    baseUrl: str
-    model: str
-    priority: bool = False
-
-
-class CustomModelCreate(BaseModel):
-    """创建自定义模型"""
-    name: str
-    provider: str
-    apiKey: str
-    baseUrl: str = ""
-    model: str
-    priority: bool = False
-
-
-class CustomModelUpdate(BaseModel):
-    """更新自定义模型"""
-    name: Optional[str] = None
-    provider: Optional[str] = None
-    apiKey: Optional[str] = None
-    baseUrl: Optional[str] = None
-    model: Optional[str] = None
-    priority: Optional[bool] = None
-
-
-# 内存存储
-_platform_models = {k: v.copy() for k, v in zip([p["id"] for p in PLATFORM_MODELS], PLATFORM_MODELS)}
-_custom_models: Dict[str, List[CustomModel]] = {}
-
-
-def _get_custom_models(device_id: str = "default") -> List[CustomModel]:
-    """获取自定义模型"""
-    if device_id not in _custom_models:
-        _custom_models[device_id] = []
-    return _custom_models[device_id]
 
 
 # ========== 平台模型 API ==========
 
 @router.get("/platform")
 async def get_platform_models():
-    """获取平台模型列表"""
-    models = list(_platform_models.values())
-    return {
-        "success": True,
-        "models": models
-    }
+    """获取平台模型列表 - 从 Gateway 获取"""
+    try:
+        result = call_gateway_rpc_sync("models.list")
+        if "error" in result:
+            logger.error(f"Failed to get models: {result}")
+            return {"success": False, "error": result.get("error"), "models": []}
+        
+        models = result.get("models", [])
+        # 添加 enabled 字段（基于 tags）
+        for m in models:
+            m["enabled"] = "configured" in m.get("tags", [])
+        
+        return {"success": True, "models": models}
+    except Exception as e:
+        logger.error(f"Exception: {e}")
+        return {"success": False, "error": str(e), "models": []}
 
 
 @router.patch("/platform/{model_id}")
 async def update_platform_model(model_id: str, enabled: bool = None):
-    """更新平台模型"""
-    if model_id not in _platform_models:
-        raise HTTPException(status_code=404, detail="Model not found")
-    
+    """更新平台模型 - 暂不支持通过 RPC 修改"""
     if enabled is not None:
-        _platform_models[model_id]["enabled"] = enabled
-    
-    # 检查启用数量
-    enabled_count = sum(1 for m in _platform_models.values() if m.get("enabled"))
-    if enabled and enabled_count > 6:
-        raise HTTPException(status_code=400, detail="最多启用 6 个模型")
-    
-    return {
-        "success": True,
-        "model": _platform_models[model_id]
-    }
+        # TODO: 通过 config.set 实现
+        pass
+    return {"success": True, "message": "Model configuration via Gateway not implemented yet"}
 
 
 # ========== 自定义模型 API ==========
+
+# 内存存储（生产环境应使用数据库）
+_custom_models: Dict[str, List[Dict]] = {}
+
+
+def _get_custom_models(device_id: str = "default") -> List[Dict]:
+    """获取自定义模型"""
+    if device_id not in _custom_models:
+        _custom_models[device_id] = []
+    return _custom_models[device_id]
+
 
 @router.get("/custom")
 async def get_custom_models(device_id: str = "default"):
     """获取自定义模型列表"""
     models = _get_custom_models(device_id)
-    return {
-        "success": True,
-        "models": [m.model_dump() for m in models]
-    }
+    return {"success": True, "models": models}
 
 
 @router.post("/custom")
 async def create_custom_model(
     device_id: str = "default",
-    model: CustomModelCreate = None
+    name: str = None,
+    provider: str = None,
+    apiKey: str = None,
+    baseUrl: str = "",
+    model: str = None,
+    priority: bool = False
 ):
     """创建自定义模型"""
-    if model is None:
-        raise HTTPException(status_code=400, detail="Request body required")
+    if not all([name, provider, apiKey, model]):
+        return {"success": False, "error": "Missing required fields"}
     
-    # 验证服务商
-    if model.provider not in PROVIDERS:
-        raise HTTPException(status_code=400, detail=f"Unsupported provider: {model.provider}")
-    
-    # 获取服务商默认 URL
-    provider_info = PROVIDERS[model.provider]
-    base_url = model.baseUrl or provider_info["baseUrl"]
-    
-    # 生成 ID
-    new_id = str(uuid.uuid4())[:8]
-    
-    custom_model = CustomModel(
-        id=new_id,
-        name=model.name,
-        provider=model.provider,
-        providerName=provider_info["name"],
-        apiKey=model.apiKey,
-        baseUrl=base_url,
-        model=model.model,
-        priority=model.priority
-    )
+    new_model = {
+        "id": str(uuid.uuid4())[:8],
+        "name": name,
+        "provider": provider,
+        "apiKey": apiKey,
+        "baseUrl": baseUrl,
+        "model": model,
+        "priority": priority
+    }
     
     models = _get_custom_models(device_id)
+    models.append(new_model)
     
-    # 如果设为优先，取消其他优先
-    if custom_model.priority:
-        for m in models:
-            m.priority = False
-    
-    models.append(custom_model)
-    
-    return {
-        "success": True,
-        "model": custom_model.model_dump()
-    }
+    return {"success": True, "model": new_model}
 
 
 @router.patch("/custom/{model_id}")
 async def update_custom_model(
     device_id: str = "default",
     model_id: str = None,
-    update: CustomModelUpdate = None
+    name: str = None,
+    priority: bool = None
 ):
     """更新自定义模型"""
-    if update is None or model_id is None:
-        raise HTTPException(status_code=400, detail="Invalid request")
-    
     models = _get_custom_models(device_id)
-    model = next((m for m in models if m.id == model_id), None)
-    
-    if not model:
-        raise HTTPException(status_code=404, detail="Model not found")
-    
-    # 更新字段
-    if update.name is not None:
-        model.name = update.name
-    if update.provider is not None:
-        if update.provider not in PROVIDERS:
-            raise HTTPException(status_code=400, detail=f"Unsupported provider: {update.provider}")
-        model.provider = update.provider
-        model.providerName = PROVIDERS[update.provider]["name"]
-    if update.apiKey is not None:
-        model.apiKey = update.apiKey
-    if update.baseUrl is not None:
-        model.baseUrl = update.baseUrl
-    if update.model is not None:
-        model.model = update.model
-    if update.priority is not None:
-        # 如果设为优先，取消其他优先
-        if update.priority:
-            for m in models:
-                m.priority = False
-        model.priority = update.priority
-    
-    return {
-        "success": True,
-        "model": model.model_dump()
-    }
+    for m in models:
+        if m["id"] == model_id:
+            if name:
+                m["name"] = name
+            if priority is not None:
+                m["priority"] = priority
+            return {"success": True, "model": m}
+    return {"success": False, "error": "Model not found"}
 
 
 @router.delete("/custom/{model_id}")
 async def delete_custom_model(device_id: str = "default", model_id: str = None):
     """删除自定义模型"""
-    if model_id is None:
-        raise HTTPException(status_code=400, detail="Model ID required")
-    
     models = _get_custom_models(device_id)
-    original_count = len(models)
-    models = [m for m in models if m.id != model_id]
+    original_len = len(models)
+    models = [m for m in models if m["id"] != model_id]
     
-    if len(models) == original_count:
-        raise HTTPException(status_code=404, detail="Model not found")
+    if len(models) == original_len:
+        return {"success": False, "error": "Model not found"}
     
     _custom_models[device_id] = models
-    
     return {"success": True}
 
 
@@ -244,8 +135,11 @@ async def get_providers():
     return {
         "success": True,
         "providers": [
-            {"id": k, "name": v["name"], "baseUrl": v["baseUrl"]}
-            for k, v in PROVIDERS.items()
+            {"id": "openai", "name": "OpenAI", "baseUrl": "https://api.openai.com/v1"},
+            {"id": "anthropic", "name": "Anthropic", "baseUrl": "https://api.anthropic.com"},
+            {"id": "deepseek", "name": "DeepSeek", "baseUrl": "https://api.deepseek.com/v1"},
+            {"id": "moonshot", "name": "Moonshot", "baseUrl": "https://api.moonshot.cn/v1"},
+            {"id": "zhipu", "name": "智谱 AI", "baseUrl": "https://open.bigmodel.cn/api/paas/v4"},
         ]
     }
 
@@ -253,11 +147,15 @@ async def get_providers():
 @router.get("")
 async def get_all_models(device_id: str = "default"):
     """获取所有模型（平台 + 自定义）"""
-    platform = list(_platform_models.values())
+    # 平台模型从 Gateway 获取
+    platform_result = call_gateway_rpc_sync("models.list")
+    platform = platform_result.get("models", []) if isinstance(platform_result, dict) else []
+    
+    # 自定义模型从本地获取
     custom = _get_custom_models(device_id)
     
     return {
         "success": True,
         "platformModels": platform,
-        "customModels": [m.model_dump() for m in custom]
+        "customModels": custom
     }

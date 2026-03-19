@@ -18,7 +18,7 @@ from app.core.security import parse_auth_token, parse_user_from_auth_header
 from app.core.supabase import get_db, init_db
 from app.core.redis_cache import init_cache
 from app.core.websocket import manager
-from api import device, wechat, proxy, cron, skills, sessions, models, channels, mcp
+from api import device, wechat, proxy, cron, skills, sessions, models, channels, mcp, tasks, tools
 
 # 初始化 Supabase（持久化存储）和 Redis（缓存）
 init_db(SUPABASE_URL, SUPABASE_KEY)
@@ -48,6 +48,9 @@ app.include_router(sessions.router)
 app.include_router(models.router)
 app.include_router(channels.router)
 app.include_router(mcp.router)
+app.include_router(tasks.router)
+app.include_router(tools.router)
+app.include_router(tools.acp_router)
 
 
 def _truncate_text(text: str, limit: int = 2000) -> str:
