@@ -2,7 +2,8 @@
 Skills 管理 API - 调用设备端 Gateway RPC
 """
 from fastapi import APIRouter, HTTPException, Request
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
+from enum import Enum
 import logging
 
 from app.core.websocket import manager
@@ -13,9 +14,28 @@ router = APIRouter(prefix="/skills", tags=["skills"])
 logger = logging.getLogger(__name__)
 
 
+class SkillCategory(str, Enum):
+    """技能分类"""
+    BUNDLED = "bundled"       # 系统内置
+    EXTRA = "extra"           # 官方扩展
+    WORKSPACE = "workspace"   # 用户自装
+    ALL = "all"
+
+
 @router.get("")
-async def list_skills(device_id: str = None, request: Request = None):
-    """获取技能列表 - 从设备端 Gateway 获取"""
+async def list_skills(
+    device_id: str = None, 
+    request: Request = None,
+    category: SkillCategory = SkillCategory.ALL,
+    filter_unavailable: bool = True
+):
+    """获取技能列表 - 从设备端 Gateway 获取
+    
+    Args:
+        device_id: 设备ID
+        category: 过滤分类 (bundled/extra/workspace/all)
+        filter_unavailable: 是否过滤掉不可用的技能 (默认true)
+    """
     if not device_id or not request:
         return {"success": False, "error": "device_id required", "skills": [], "count": 0}
     
@@ -30,11 +50,51 @@ async def list_skills(device_id: str = None, request: Request = None):
         
         skills = result.get("skills", []) if isinstance(result, dict) else []
         
+        # 按来源分类
+        categorized = {
+            "bundled": [],    # 系统内置
+            "extra": [],      # 官方扩展
+            "workspace": [],   # 用户自装
+        }
+        
+        for skill in skills:
+            source = skill.get("source", "")
+            status = skill.get("status", "missing")
+            
+            # 过滤不可用
+            if filter_unavailable and status not in ("ready", "enabled"):
+                continue
+            
+            # 分类
+            if "bundled" in source:
+                categorized["bundled"].append(skill)
+            elif "extra" in source:
+                categorized["extra"].append(skill)
+            elif "workspace" in source:
+                categorized["workspace"].append(skill)
+        
+        # 根据 category 过滤
+        if category != SkillCategory.ALL:
+            skills = categorized.get(category, [])
+        else:
+            # 返回所有分类
+            skills = {
+                "bundled": categorized["bundled"],
+                "extra": categorized["extra"], 
+                "workspace": categorized["workspace"],
+                "all_count": len(categorized["bundled"]) + len(categorized["extra"]) + len(categorized["workspace"])
+            }
+        
         return {
             "success": True, 
             "skills": skills, 
-            "count": len(skills),
-            "readyCount": sum(1 for s in skills if s.get("status") == "ready")
+            "count": len(skills) if isinstance(skills, list) else skills.get("all_count", 0),
+            "readyCount": sum(1 for s in skills if isinstance(skills, list) and s.get("status") == "ready") if isinstance(skills, list) else 0,
+            "categories": {
+                "bundled": len(categorized["bundled"]),
+                "extra": len(categorized["extra"]),
+                "workspace": len(categorized["workspace"])
+            } if category == SkillCategory.ALL else None
         }
     except Exception as e:
         logger.error(f"Exception: {e}")
@@ -62,13 +122,23 @@ async def check_skills(device_id: str = None, request: Request = None):
         missing = sum(1 for s in skills if s.get("status") == "missing")
         disabled = sum(1 for s in skills if s.get("status") == "disabled")
         
+        # 按分类统计
+        bundled = [s["id"] for s in skills if "bundled" in s.get("source", "")]
+        extra = [s["id"] for s in skills if "extra" in s.get("source", "")]
+        workspace = [s["id"] for s in skills if "workspace" in s.get("source", "")]
+        
         return {
             "success": True,
             "total": total,
             "readyCount": ready,
             "missingCount": missing,
             "disabledCount": disabled,
-            "readySkills": [s["id"] for s in skills if s.get("status") == "ready"]
+            "readySkills": [s["id"] for s in skills if s.get("status") == "ready"],
+            "categories": {
+                "bundled": {"total": len(bundled), "ready": sum(1 for s in skills if "bundled" in s.get("source", "") and s.get("status") == "ready")},
+                "extra": {"total": len(extra), "ready": sum(1 for s in skills if "extra" in s.get("source", "") and s.get("status") == "ready")},
+                "workspace": {"total": len(workspace), "ready": sum(1 for s in skills if "workspace" in s.get("source", "") and s.get("status") == "ready")}
+            }
         }
     except Exception as e:
         logger.error(f"Exception: {e}")
