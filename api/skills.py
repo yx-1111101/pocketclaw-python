@@ -1,21 +1,28 @@
 """
-Skills 管理 API - 调用真实 Gateway RPC
+Skills 管理 API - 调用设备端 Gateway RPC
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from typing import Optional, Dict, Any
 import logging
 
-from app.core.gateway_rpc import call_gateway_rpc_sync
+from app.core.websocket import manager
+from api.proxy import _require_user_device
+from app.core.supabase import get_db
 
 router = APIRouter(prefix="/skills", tags=["skills"])
 logger = logging.getLogger(__name__)
 
 
 @router.get("")
-async def list_skills():
-    """获取技能列表 - 从 Gateway 获取"""
+async def list_skills(device_id: str = None, request: Request = None):
+    """获取技能列表 - 从设备端 Gateway 获取"""
+    if not device_id or not request:
+        return {"success": False, "error": "device_id required", "skills": [], "count": 0}
+    
     try:
-        result = call_gateway_rpc_sync("skills.list", timeout=15.0)
+        db = get_db()
+        await _require_user_device(db, request, device_id)
+        result = await manager.send_request(device_id, "skills.list", {}, method="GET", timeout=15.0)
         
         if isinstance(result, dict) and "error" in result:
             logger.error(f"Failed to get skills: {result}")
@@ -35,11 +42,15 @@ async def list_skills():
 
 
 @router.get("/check")
-async def check_skills():
-    """技能状态检查 - 从 Gateway 获取"""
+async def check_skills(device_id: str = None, request: Request = None):
+    """技能状态检查 - 从设备端 Gateway 获取"""
+    if not device_id or not request:
+        return {"success": False, "error": "device_id required"}
+    
     try:
-        # skills.list 已经包含状态信息
-        result = call_gateway_rpc_sync("skills.list", timeout=15.0)
+        db = get_db()
+        await _require_user_device(db, request, device_id)
+        result = await manager.send_request(device_id, "skills.list", {}, method="GET", timeout=15.0)
         
         if isinstance(result, dict) and "error" in result:
             return {"success": False, "error": result.get("error")}
@@ -65,10 +76,15 @@ async def check_skills():
 
 
 @router.post("/{skill_id}/enable")
-async def enable_skill(skill_id: str):
+async def enable_skill(skill_id: str, device_id: str = None, request: Request = None):
     """启用技能"""
+    if not device_id or not request:
+        return {"success": False, "error": "device_id required"}
+    
     try:
-        result = call_gateway_rpc_sync("skills.enable", {"skillId": skill_id})
+        db = get_db()
+        await _require_user_device(db, request, device_id)
+        result = await manager.send_request(device_id, "skills.enable", {"skillId": skill_id}, timeout=10.0)
         
         if isinstance(result, dict) and "error" in result:
             return {"success": False, "error": result.get("error")}
@@ -80,10 +96,15 @@ async def enable_skill(skill_id: str):
 
 
 @router.post("/{skill_id}/disable")
-async def disable_skill(skill_id: str):
+async def disable_skill(skill_id: str, device_id: str = None, request: Request = None):
     """禁用技能"""
+    if not device_id or not request:
+        return {"success": False, "error": "device_id required"}
+    
     try:
-        result = call_gateway_rpc_sync("skills.disable", {"skillId": skill_id})
+        db = get_db()
+        await _require_user_device(db, request, device_id)
+        result = await manager.send_request(device_id, "skills.disable", {"skillId": skill_id}, timeout=10.0)
         
         if isinstance(result, dict) and "error" in result:
             return {"success": False, "error": result.get("error")}
@@ -95,10 +116,15 @@ async def disable_skill(skill_id: str):
 
 
 @router.get("/{skill_id}")
-async def get_skill(skill_id: str):
+async def get_skill(skill_id: str, device_id: str = None, request: Request = None):
     """获取技能详情"""
+    if not device_id or not request:
+        return {"success": False, "error": "device_id required"}
+    
     try:
-        result = call_gateway_rpc_sync("skills.list", timeout=15.0)
+        db = get_db()
+        await _require_user_device(db, request, device_id)
+        result = await manager.send_request(device_id, "skills.list", {}, method="GET", timeout=15.0)
         
         if isinstance(result, dict) and "error" in result:
             return {"success": False, "error": result.get("error")}

@@ -1,24 +1,31 @@
 """
-Tasks/Cron 管理 API - 调用真实 Gateway RPC
+Tasks/Cron 管理 API - 调用设备端 Gateway RPC
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 import uuid
 import logging
 
-from app.core.gateway_rpc import call_gateway_rpc_sync
+from app.core.websocket import manager
+from api.proxy import _require_user_device
+from app.core.supabase import get_db
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 logger = logging.getLogger(__name__)
 
 
 @router.get("")
-async def list_tasks():
-    """获取任务列表 - 从 Gateway cron.list 获取"""
+async def list_tasks(device_id: str = None, request: Request = None):
+    """获取任务列表 - 从设备端 Gateway cron.list 获取"""
+    if not device_id or not request:
+        return {"success": False, "error": "device_id required", "jobs": [], "count": 0}
+    
     try:
-        result = call_gateway_rpc_sync("cron.list", timeout=10.0)
+        db = get_db()
+        await _require_user_device(db, request, device_id)
+        result = await manager.send_request(device_id, "cron.list", {}, method="GET", timeout=10.0)
         
         if isinstance(result, dict) and "error" in result:
             logger.error(f"Failed to get tasks: {result}")
@@ -39,16 +46,24 @@ async def list_tasks():
 
 @router.post("")
 async def create_task(
+    device_id: str = None,
+    request: Request = None,
     name: str = None,
     schedule: str = None,
     message: str = None,
     enabled: bool = True
 ):
     """创建任务"""
+    if not device_id or not request:
+        return {"success": False, "error": "device_id required"}
+    
     if not name or not schedule:
         return {"success": False, "error": "name and schedule are required"}
     
     try:
+        db = get_db()
+        await _require_user_device(db, request, device_id)
+        
         params = {
             "name": name,
             "schedule": schedule,
@@ -56,7 +71,7 @@ async def create_task(
         if message:
             params["message"] = message
             
-        result = call_gateway_rpc_sync("cron.add", params)
+        result = await manager.send_request(device_id, "cron.add", params, timeout=10.0)
         
         if isinstance(result, dict) and "error" in result:
             return {"success": False, "error": result.get("error")}
@@ -74,15 +89,23 @@ async def create_task(
 @router.patch("/{job_id}")
 async def update_task(
     job_id: str,
+    device_id: str = None,
+    request: Request = None,
     name: str = None,
     schedule: str = None,
     enabled: bool = None
 ):
     """更新任务"""
+    if not device_id or not request:
+        return {"success": False, "error": "device_id required"}
+    
     if not name and not schedule and enabled is None:
         return {"success": False, "error": "No fields to update"}
     
     try:
+        db = get_db()
+        await _require_user_device(db, request, device_id)
+        
         params = {"jobId": job_id}
         if name:
             params["name"] = name
@@ -91,7 +114,7 @@ async def update_task(
         if enabled is not None:
             params["enabled"] = enabled
             
-        result = call_gateway_rpc_sync("cron.edit", params)
+        result = await manager.send_request(device_id, "cron.edit", params, timeout=10.0)
         
         if isinstance(result, dict) and "error" in result:
             return {"success": False, "error": result.get("error")}
@@ -103,10 +126,15 @@ async def update_task(
 
 
 @router.delete("/{job_id}")
-async def delete_task(job_id: str):
+async def delete_task(job_id: str, device_id: str = None, request: Request = None):
     """删除任务"""
+    if not device_id or not request:
+        return {"success": False, "error": "device_id required"}
+    
     try:
-        result = call_gateway_rpc_sync("cron.delete", {"jobId": job_id})
+        db = get_db()
+        await _require_user_device(db, request, device_id)
+        result = await manager.send_request(device_id, "cron.delete", {"jobId": job_id}, timeout=10.0)
         
         if isinstance(result, dict) and "error" in result:
             return {"success": False, "error": result.get("error")}
@@ -118,10 +146,15 @@ async def delete_task(job_id: str):
 
 
 @router.post("/{job_id}/run")
-async def run_task(job_id: str):
+async def run_task(job_id: str, device_id: str = None, request: Request = None):
     """立即执行任务"""
+    if not device_id or not request:
+        return {"success": False, "error": "device_id required"}
+    
     try:
-        result = call_gateway_rpc_sync("cron.run", {"jobId": job_id})
+        db = get_db()
+        await _require_user_device(db, request, device_id)
+        result = await manager.send_request(device_id, "cron.run", {"jobId": job_id}, timeout=10.0)
         
         if isinstance(result, dict) and "error" in result:
             return {"success": False, "error": result.get("error")}

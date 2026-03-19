@@ -1,13 +1,15 @@
 """
-模型管理 API - 调用真实 Gateway RPC
+模型管理 API - 调用设备端 Gateway RPC
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import uuid
 import logging
 
-from app.core.gateway_rpc import call_gateway_rpc_sync
+from app.core.websocket import manager
+from api.proxy import _require_user_device
+from app.core.supabase import get_db
 
 router = APIRouter(prefix="/models", tags=["models"])
 logger = logging.getLogger(__name__)
@@ -16,15 +18,23 @@ logger = logging.getLogger(__name__)
 # ========== 平台模型 API ==========
 
 @router.get("/platform")
-async def get_platform_models():
-    """获取平台模型列表 - 从 Gateway 获取"""
+async def get_platform_models(device_id: str = None, request: Request = None):
+    """获取平台模型列表 - 从设备端 Gateway 获取"""
     try:
-        result = call_gateway_rpc_sync("models.list")
-        if "error" in result:
+        if device_id and request:
+            # 调用设备的 Gateway
+            db = get_db()
+            await _require_user_device(db, request, device_id)
+            result = await manager.send_request(device_id, "models.list", {}, method="GET")
+        else:
+            # 没有设备ID，返回错误
+            return {"success": False, "error": "device_id required", "models": []}
+        
+        if isinstance(result, dict) and "error" in result:
             logger.error(f"Failed to get models: {result}")
             return {"success": False, "error": result.get("error"), "models": []}
         
-        models = result.get("models", [])
+        models = result.get("models", []) if isinstance(result, dict) else []
         # 添加 enabled 字段（基于 tags）
         for m in models:
             m["enabled"] = "configured" in m.get("tags", [])
@@ -36,12 +46,9 @@ async def get_platform_models():
 
 
 @router.patch("/platform/{model_id}")
-async def update_platform_model(model_id: str, enabled: bool = None):
-    """更新平台模型 - 暂不支持通过 RPC 修改"""
-    if enabled is not None:
-        # TODO: 通过 config.set 实现
-        pass
-    return {"success": True, "message": "Model configuration via Gateway not implemented yet"}
+async def update_platform_model(device_id: str = None, model_id: str = None, enabled: bool = None, request: Request = None):
+    """更新平台模型 - 暂不支持"""
+    return {"success": True, "message": "Model configuration via device not implemented yet"}
 
 
 # ========== 自定义模型 API ==========
@@ -145,11 +152,21 @@ async def get_providers():
 
 
 @router.get("")
-async def get_all_models(device_id: str = "default"):
+async def get_all_models(device_id: str = None, request: Request = None):
     """获取所有模型（平台 + 自定义）"""
-    # 平台模型从 Gateway 获取
-    platform_result = call_gateway_rpc_sync("models.list")
-    platform = platform_result.get("models", []) if isinstance(platform_result, dict) else []
+    if not device_id or not request:
+        return {"success": False, "error": "device_id required"}
+    
+    # 平台模型从设备端 Gateway 获取
+    db = get_db()
+    await _require_user_device(db, request, device_id)
+    
+    try:
+        platform_result = await manager.send_request(device_id, "models.list", {}, method="GET")
+        platform = platform_result.get("models", []) if isinstance(platform_result, dict) else []
+    except Exception as e:
+        logger.error(f"Failed to get platform models: {e}")
+        platform = []
     
     # 自定义模型从本地获取
     custom = _get_custom_models(device_id)
