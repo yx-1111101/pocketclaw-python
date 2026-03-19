@@ -177,11 +177,7 @@ async def proxy_websocket(websocket: WebSocket, device_id: str):
                 response = json.loads(data)
                 request_id = response.get("request_id")
                 if request_id:
-                    # 有 request_id 的是普通请求响应
                     await manager.handle_response(request_id, response.get("data"))
-                else:
-                    # 没有 request_id 的是流式消息，转发给小程序客户端
-                    await manager.handle_stream_chunk(device_id, response)
             except:
                 pass
     except WebSocketDisconnect:

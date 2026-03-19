@@ -279,6 +279,12 @@ def _resolve_stream_targets(device_id: str, event_name: str, payload: dict) -> S
                 device_id, event_name, run_id,
             )
             return only
+        # 兜底：严格模式下若只有 1 个客户端在线，仍允许投递（避免上游漏带 sessionKey/runId 导致“全程无流”）
+        if len(online) == 1:
+            only = set(online)
+            if run_id:
+                _bind_run_clients(device_id, run_id, only, session_key=session_key)
+            return only
     else:
         if pending_targets:
             selected = max(pending_targets, key=lambda ws: pending_map.get(ws, 0.0))
