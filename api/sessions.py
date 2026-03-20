@@ -81,11 +81,13 @@ class SessionPatchRequest(BaseModel):
     label: Optional[str] = None
     pinned: Optional[bool] = None
     model: Optional[str] = None
+    thinkingLevel: Optional[str] = None
+    verboseLevel: Optional[str] = None
 
 
 @router.patch("/{device_id}/sessions/{session_key}")
 async def patch_session(device_id: str, session_key: str, body: SessionPatchRequest, request: Request):
-    """重命名 / pin 会话"""
+    """重命名 / pin 会话 / 设置 thinkingLevel & verboseLevel"""
     db = get_db()
     await _require_user_device(db, request, device_id)
     patch = {k: v for k, v in body.dict().items() if v is not None}
@@ -93,13 +95,15 @@ async def patch_session(device_id: str, session_key: str, body: SessionPatchRequ
         patch["name"] = patch.pop("label")
     else:
         patch.pop("label", None)
+    # thinkingLevel / verboseLevel 直接放到 patch 里发给 gateway
     if not patch:
         raise HTTPException(status_code=400, detail="没有要更新的字段")
     try:
+        # Gateway sessions.patch 要求所有字段在根级别，用 key 标识 session
         result = await manager.send_request(
             device_id,
             "sessions.patch",
-            {"key": session_key, "sessionKey": session_key, "patch": patch},
+            {"key": session_key, **patch},
         )
         payload = result.get("data") or {}
         return {"success": True, "session": payload.get("session", {})}

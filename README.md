@@ -13,11 +13,15 @@
 ## 快速启动
 
 ```bash
+# 创建并激活虚拟环境（推荐，避免 externally-managed-environment）
+python3 -m venv .venv
+source .venv/bin/activate   # Linux/macOS
+
 # 安装依赖
-pip3 install -r requirements.txt
+pip install -r requirements.txt
 
 # 启动服务（默认 8764 端口）
-python3 -m app.main
+python -m app.main
 ```
 
 环境变量（可选，未配置时使用内置默认值）：
