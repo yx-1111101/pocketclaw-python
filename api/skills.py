@@ -58,6 +58,17 @@ def _is_skill_ready(skill: Dict[str, Any]) -> bool:
     return str(skill.get("status") or "").lower() in ("ready", "enabled")
 
 
+def _should_hide_skill(skill: Dict[str, Any]) -> bool:
+    """
+    对小程序隐藏当前不可用的技能：
+    - always 保留（系统常驻）
+    - 非 always 且 eligible=False 的统一不下发（包含“受限启用”和“不可用未启用”）
+    """
+    if bool(skill.get("always")):
+        return False
+    return not bool(skill.get("eligible"))
+
+
 def _skill_source_group(skill: Dict[str, Any]) -> str:
     source = str(skill.get("source") or "").lower()
     if "bundled" in source:
@@ -65,6 +76,83 @@ def _skill_source_group(skill: Dict[str, Any]) -> str:
     if "extra" in source:
         return "extra"
     return "workspace"
+
+
+def _norm_text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _extract_search_items(payload: Dict[str, Any]) -> List[Any]:
+    if not isinstance(payload, dict):
+        return []
+    for key in ("items", "skills", "results"):
+        items = payload.get(key)
+        if isinstance(items, list):
+            return items
+    data = payload.get("data")
+    if isinstance(data, dict):
+        for key in ("items", "skills", "results"):
+            items = data.get(key)
+            if isinstance(items, list):
+                return items
+    return []
+
+
+def _normalize_search_item(item: Any) -> Optional[Dict[str, str]]:
+    if isinstance(item, str):
+        slug = _norm_text(item)
+        if not slug:
+            return None
+        return {
+            "slug": slug,
+            "name": slug,
+            "version": "",
+            "description": "",
+            "homepage": "",
+        }
+
+    if not isinstance(item, dict):
+        return None
+
+    slug = _norm_text(
+        item.get("slug")
+        or item.get("name")
+        or item.get("id")
+        or item.get("skill")
+        or item.get("package")
+    )
+    if not slug:
+        return None
+
+    name = _norm_text(item.get("title") or item.get("displayName") or item.get("label") or slug)
+    version = _norm_text(item.get("latestVersion") or item.get("version") or item.get("tag"))
+    description = _norm_text(item.get("description") or item.get("summary"))
+    homepage = _norm_text(item.get("homepage") or item.get("url"))
+
+    return {
+        "slug": slug,
+        "name": name,
+        "version": version,
+        "description": description,
+        "homepage": homepage,
+    }
+
+
+async def _read_json_body(request: Request) -> Dict[str, Any]:
+    if not request:
+        return {}
+    try:
+        body = await request.json()
+        return body if isinstance(body, dict) else {}
+    except Exception:
+        return {}
+
+
+async def _load_status_skills(device_id: str) -> List[Dict[str, Any]]:
+    result = await manager.send_request(device_id, "skills.status", {}, method="GET", timeout=15.0)
+    payload = _rpc_payload(result)
+    raw_skills = payload.get("skills", []) if isinstance(payload, dict) else []
+    return [_normalize_skill(s) for s in raw_skills if isinstance(s, dict)]
 
 
 class SkillCategory(str, Enum):
@@ -95,12 +183,9 @@ async def list_skills(
     try:
         db = get_db()
         await _require_user_device(db, request, device_id)
-        result = await manager.send_request(device_id, "skills.status", {}, method="GET", timeout=15.0)
-        payload = _rpc_payload(result)
-        raw_skills = payload.get("skills", []) if isinstance(payload, dict) else []
-        skills: List[Dict[str, Any]] = [
-            _normalize_skill(s) for s in raw_skills if isinstance(s, dict)
-        ]
+        skills = await _load_status_skills(device_id)
+        # 后端统一过滤当前不可用技能，前端仅展示“已启用/未启用”
+        skills = [s for s in skills if not _should_hide_skill(s)]
         
         # 按来源分类
         categorized = {
@@ -155,12 +240,8 @@ async def check_skills(device_id: str = None, request: Request = None):
     try:
         db = get_db()
         await _require_user_device(db, request, device_id)
-        result = await manager.send_request(device_id, "skills.status", {}, method="GET", timeout=15.0)
-        payload = _rpc_payload(result)
-        raw_skills = payload.get("skills", []) if isinstance(payload, dict) else []
-        skills: List[Dict[str, Any]] = [
-            _normalize_skill(s) for s in raw_skills if isinstance(s, dict)
-        ]
+        skills = await _load_status_skills(device_id)
+        skills = [s for s in skills if not _should_hide_skill(s)]
         
         total = len(skills)
         ready = sum(1 for s in skills if _is_skill_ready(s))
@@ -242,6 +323,55 @@ async def disable_skill(skill_id: str, device_id: str = None, request: Request =
         return {"success": False, "error": str(e)}
 
 
+@router.get("/search")
+async def search_skills(
+    device_id: str = None,
+    request: Request = None,
+    q: str = "",
+    limit: int = 10,
+):
+    """搜索可安装技能（走设备 file-server 的 /skills/search）"""
+    if not device_id or not request:
+        return {"success": False, "error": "device_id required", "items": [], "count": 0}
+
+    keyword = _norm_text(q)
+    if not keyword:
+        return {"success": True, "items": [], "count": 0, "query": keyword}
+
+    safe_limit = max(1, min(int(limit or 10), 30))
+
+    try:
+        db = get_db()
+        await _require_user_device(db, request, device_id)
+
+        result = await manager.send_request(
+            device_id,
+            "skills/search",
+            {},
+            method="GET",
+            query={"q": keyword, "limit": safe_limit},
+            timeout=25.0,
+        )
+        payload = _rpc_payload(result)
+
+        if isinstance(payload, dict) and payload.get("success") is False:
+            return payload
+        if isinstance(payload, dict) and payload.get("error"):
+            return {"success": False, "error": payload.get("error"), "items": [], "count": 0}
+
+        raw_items = _extract_search_items(payload)
+        items = [x for x in (_normalize_search_item(it) for it in raw_items) if x]
+        return {
+            "success": True,
+            "items": items,
+            "count": len(items),
+            "query": keyword,
+        }
+    except Exception as e:
+        logger.error(f"Exception: {e}")
+        return {"success": False, "error": str(e), "items": [], "count": 0}
+
+
 @router.get("/{skill_id}")
 async def get_skill(skill_id: str, device_id: str = None, request: Request = None):
     """获取技能详情"""
@@ -251,12 +381,8 @@ async def get_skill(skill_id: str, device_id: str = None, request: Request = Non
     try:
         db = get_db()
         await _require_user_device(db, request, device_id)
-        result = await manager.send_request(device_id, "skills.status", {}, method="GET", timeout=15.0)
-        payload = _rpc_payload(result)
-        raw_skills = payload.get("skills", []) if isinstance(payload, dict) else []
-        skills: List[Dict[str, Any]] = [
-            _normalize_skill(s) for s in raw_skills if isinstance(s, dict)
-        ]
+        skills = await _load_status_skills(device_id)
+        skills = [s for s in skills if not _should_hide_skill(s)]
         skill = next(
             (
                 s for s in skills
@@ -275,47 +401,63 @@ async def get_skill(skill_id: str, device_id: str = None, request: Request = Non
 
 
 
-async def install_skill(device_id: str = None, request: Request = None, name: str = None, version: str = None):
-    """安装技能"""
+async def install_skill(device_id: str = None, request: Request = None):
+    """安装新技能（走设备 file-server 的 /skills/install，底层由 ClawHub 处理）"""
     if not device_id or not request:
         return {"success": False, "error": "device_id required"}
-    
-    if not name:
-        return {"success": False, "error": "name required"}
-    
+
     try:
+        body = await _read_json_body(request)
+        skill_name = _norm_text(body.get("name"))
+        if not skill_name:
+            return {"success": False, "error": "name required"}
+
+        version = _norm_text(body.get("version"))
+
         db = get_db()
         await _require_user_device(db, request, device_id)
-        
-        params = {"skillId": name}
+
+        params: Dict[str, Any] = {"name": skill_name}
         if version:
             params["version"] = version
-            
-        result = await manager.send_request(device_id, "skills.install", params, timeout=30.0)
-        
-        if isinstance(result, dict) and "error" in result:
-            return {"success": False, "error": result.get("error")}
-        
-        return {"success": True, "message": "Skill installed"}
+
+        # 使用路径函数触发设备端 HTTP /skills/install，不走 Gateway skills.install。
+        result = await manager.send_request(device_id, "skills/install", params, method="POST", timeout=120.0)
+        payload = _rpc_payload(result)
+
+        # file-server 通常会返回 {success: bool, ...}
+        if isinstance(payload, dict) and payload.get("success") is False:
+            return payload
+        if isinstance(payload, dict) and payload.get("error"):
+            return {"success": False, "error": payload.get("error"), "result": payload}
+        if isinstance(payload, dict) and payload.get("success") is True:
+            return payload
+
+        return {
+            "success": True,
+            "message": "Skill install requested",
+            "name": skill_name,
+            "version": version or "latest",
+            "result": payload,
+        }
     except Exception as e:
         logger.error(f"Exception: {e}")
         return {"success": False, "error": str(e)}
 
 
 async def uninstall_skill(skill_id: str, device_id: str = None, request: Request = None):
-    """卸载技能"""
+    """当前网关不提供卸载 RPC，保留路由仅返回明确错误。"""
     if not device_id or not request:
         return {"success": False, "error": "device_id required"}
-    
     try:
         db = get_db()
         await _require_user_device(db, request, device_id)
-        result = await manager.send_request(device_id, "skills.uninstall", {"skillId": skill_id}, timeout=10.0)
-        
-        if isinstance(result, dict) and "error" in result:
-            return {"success": False, "error": result.get("error")}
-        
-        return {"success": True, "message": "Skill uninstalled"}
+        return {
+            "success": False,
+            "error": "uninstall_not_supported",
+            "message": "当前网关不支持 skills.uninstall，请使用禁用功能代替卸载",
+            "skillId": skill_id,
+        }
     except Exception as e:
         logger.error(f"Exception: {e}")
         return {"success": False, "error": str(e)}
@@ -325,7 +467,7 @@ async def uninstall_skill(skill_id: str, device_id: str = None, request: Request
 @device_router.get("/{device_id}/skills")
 async def device_list_skills(device_id: str, request: Request):
     """获取技能列表 - 设备前缀 (小程序调用)"""
-    # 直接调用 skills.list
+    # 直接复用 /skills 列表逻辑（底层走 skills.status）
     return await list_skills(device_id=device_id, request=request)
 
 
@@ -333,6 +475,17 @@ async def device_list_skills(device_id: str, request: Request):
 async def device_install_skill(device_id: str, request: Request):
     """安装技能"""
     return await install_skill(device_id=device_id, request=request)
+
+
+@device_router.get("/{device_id}/skills/search")
+async def device_search_skills(
+    device_id: str,
+    request: Request,
+    q: str = "",
+    limit: int = 10,
+):
+    """搜索可安装技能（小程序调用）"""
+    return await search_skills(device_id=device_id, request=request, q=q, limit=limit)
 
 
 @device_router.delete("/{device_id}/skills/{skill_id}")
