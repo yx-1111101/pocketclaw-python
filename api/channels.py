@@ -11,6 +11,7 @@ from api.proxy import _require_user_device
 from app.core.supabase import get_db
 
 router = APIRouter(prefix="/channels", tags=["channels"])
+device_router = APIRouter(prefix="/devices", tags=["设备-频道"])
 logger = logging.getLogger(__name__)
 
 
@@ -306,3 +307,35 @@ async def get_channel_capabilities(device_id: str, request: Request = None):
     except Exception as e:
         logger.error(f"Exception: {e}")
         return {"success": False, "error": str(e)}
+
+
+# ========== 设备前缀路由 (小程序调用) ==========
+
+@device_router.get("/{device_id}/channels")
+async def device_get_channels(device_id: str, request: Request = None):
+    """获取频道列表 - 设备前缀"""
+    return await get_channels(device_id, request)
+
+
+@device_router.post("/{device_id}/channels/{channel_id}")
+async def device_configure_channel(device_id: str, channel_id: str, config: ChannelConfig = None, request: Request = None):
+    """配置频道"""
+    return await configure_channel(device_id, channel_id, config or ChannelConfig(), request)
+
+
+@device_router.post("/{device_id}/channels/{channel_id}/connect")
+async def device_connect_channel(device_id: str, channel_id: str, request: Request = None):
+    """连接频道"""
+    return await connect_channel(device_id, channel_id, request)
+
+
+@device_router.post("/{device_id}/channels/{channel_id}/disconnect")
+async def device_disconnect_channel(device_id: str, channel_id: str, request: Request = None):
+    """断开频道"""
+    return await disconnect_channel(device_id, channel_id, request)
+
+
+@device_router.delete("/{device_id}/channels/{channel_id}")
+async def device_delete_channel(device_id: str, channel_id: str, request: Request = None):
+    """删除频道"""
+    return await delete_channel(device_id, channel_id, request)

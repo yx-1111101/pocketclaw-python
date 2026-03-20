@@ -11,6 +11,8 @@ from api.proxy import _require_user_device
 from app.core.supabase import get_db
 
 router = APIRouter(prefix="/skills", tags=["skills"])
+device_router = APIRouter(prefix="/devices", tags=["设备-技能"])
+
 logger = logging.getLogger(__name__)
 
 
@@ -209,3 +211,76 @@ async def get_skill(skill_id: str, device_id: str = None, request: Request = Non
     except Exception as e:
         logger.error(f"Exception: {e}")
         return {"success": False, "error": str(e)}
+
+
+
+async def install_skill(device_id: str = None, request: Request = None, name: str = None, version: str = None):
+    """安装技能"""
+    if not device_id or not request:
+        return {"success": False, "error": "device_id required"}
+    
+    if not name:
+        return {"success": False, "error": "name required"}
+    
+    try:
+        db = get_db()
+        await _require_user_device(db, request, device_id)
+        
+        params = {"skillId": name}
+        if version:
+            params["version"] = version
+            
+        result = await manager.send_request(device_id, "skills.install", params, timeout=30.0)
+        
+        if isinstance(result, dict) and "error" in result:
+            return {"success": False, "error": result.get("error")}
+        
+        return {"success": True, "message": "Skill installed"}
+    except Exception as e:
+        logger.error(f"Exception: {e}")
+        return {"success": False, "error": str(e)}
+
+
+async def uninstall_skill(skill_id: str, device_id: str = None, request: Request = None):
+    """卸载技能"""
+    if not device_id or not request:
+        return {"success": False, "error": "device_id required"}
+    
+    try:
+        db = get_db()
+        await _require_user_device(db, request, device_id)
+        result = await manager.send_request(device_id, "skills.uninstall", {"skillId": skill_id}, timeout=10.0)
+        
+        if isinstance(result, dict) and "error" in result:
+            return {"success": False, "error": result.get("error")}
+        
+        return {"success": True, "message": "Skill uninstalled"}
+    except Exception as e:
+        logger.error(f"Exception: {e}")
+        return {"success": False, "error": str(e)}
+
+# ========== 设备前缀路由 (小程序调用) ==========
+
+@device_router.get("/{device_id}/skills")
+async def device_list_skills(device_id: str, request: Request):
+    """获取技能列表 - 设备前缀 (小程序调用)"""
+    # 直接调用 skills.list
+    return await list_skills(device_id=device_id, request=request)
+
+
+@device_router.post("/{device_id}/skills/install")
+async def device_install_skill(device_id: str, request: Request):
+    """安装技能"""
+    return await install_skill(device_id=device_id, request=request)
+
+
+@device_router.delete("/{device_id}/skills/{skill_id}")
+async def device_uninstall_skill(device_id: str, skill_id: str, request: Request):
+    """卸载技能"""
+    return await uninstall_skill(skill_id=skill_id, device_id=device_id, request=request)
+
+
+@device_router.get("/{device_id}/skills/{skill_id}")
+async def device_get_skill(skill_id: str, device_id: str, request: Request):
+    """获取技能详情"""
+    return await get_skill(skill_id=skill_id, device_id=device_id, request=request)
