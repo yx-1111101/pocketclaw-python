@@ -148,6 +148,15 @@ async def _read_json_body(request: Request) -> Dict[str, Any]:
         return {}
 
 
+async def _resolve_device_id(device_id: Optional[str], request: Request) -> str:
+    """优先使用 query/path 的 device_id，缺失时回退读取 JSON body.device_id。"""
+    did = _norm_text(device_id)
+    if did:
+        return did
+    body = await _read_json_body(request)
+    return _norm_text(body.get("device_id"))
+
+
 async def _load_status_skills(device_id: str) -> List[Dict[str, Any]]:
     result = await manager.send_request(device_id, "skills.status", {}, method="GET", timeout=15.0)
     payload = _rpc_payload(result)
@@ -276,10 +285,13 @@ async def check_skills(device_id: str = None, request: Request = None):
 @router.post("/{skill_id}/enable")
 async def enable_skill(skill_id: str, device_id: str = None, request: Request = None):
     """启用技能"""
-    if not device_id or not request:
+    if not request:
         return {"success": False, "error": "device_id required"}
     
     try:
+        device_id = await _resolve_device_id(device_id, request)
+        if not device_id:
+            return {"success": False, "error": "device_id required"}
         db = get_db()
         await _require_user_device(db, request, device_id)
         result = await manager.send_request(
@@ -301,10 +313,13 @@ async def enable_skill(skill_id: str, device_id: str = None, request: Request = 
 @router.post("/{skill_id}/disable")
 async def disable_skill(skill_id: str, device_id: str = None, request: Request = None):
     """禁用技能"""
-    if not device_id or not request:
+    if not request:
         return {"success": False, "error": "device_id required"}
     
     try:
+        device_id = await _resolve_device_id(device_id, request)
+        if not device_id:
+            return {"success": False, "error": "device_id required"}
         db = get_db()
         await _require_user_device(db, request, device_id)
         result = await manager.send_request(
