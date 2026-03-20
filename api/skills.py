@@ -16,6 +16,57 @@ device_router = APIRouter(prefix="/devices", tags=["设备-技能"])
 logger = logging.getLogger(__name__)
 
 
+def _rpc_payload(result: Dict[str, Any]) -> Dict[str, Any]:
+    """兼容 manager.send_request 的返回结构：{status, request_id, data}"""
+    if not isinstance(result, dict):
+        return {}
+    data = result.get("data")
+    return data if isinstance(data, dict) else {}
+
+
+def _derive_skill_status(skill: Dict[str, Any]) -> str:
+    raw = skill.get("status")
+    if isinstance(raw, str) and raw:
+        return raw
+    if bool(skill.get("disabled")):
+        return "disabled"
+    if bool(skill.get("blockedByAllowlist")):
+        return "blocked"
+    missing = skill.get("missing")
+    if isinstance(missing, list) and missing:
+        return "missing"
+    if bool(skill.get("eligible")):
+        return "ready"
+    return "missing"
+
+
+def _normalize_skill(skill: Dict[str, Any]) -> Dict[str, Any]:
+    item = dict(skill or {})
+    skill_key = str(item.get("skillKey") or item.get("id") or item.get("name") or "").strip()
+    if skill_key and "id" not in item:
+        item["id"] = skill_key
+    if skill_key and "skillKey" not in item:
+        item["skillKey"] = skill_key
+    if skill_key and "name" not in item:
+        item["name"] = skill_key
+    item["status"] = _derive_skill_status(item)
+    item["enabled"] = not bool(item.get("disabled"))
+    return item
+
+
+def _is_skill_ready(skill: Dict[str, Any]) -> bool:
+    return str(skill.get("status") or "").lower() in ("ready", "enabled")
+
+
+def _skill_source_group(skill: Dict[str, Any]) -> str:
+    source = str(skill.get("source") or "").lower()
+    if "bundled" in source:
+        return "bundled"
+    if "extra" in source:
+        return "extra"
+    return "workspace"
+
+
 class SkillCategory(str, Enum):
     """技能分类"""
     BUNDLED = "bundled"       # 系统内置
@@ -44,13 +95,12 @@ async def list_skills(
     try:
         db = get_db()
         await _require_user_device(db, request, device_id)
-        result = await manager.send_request(device_id, "skills.list", {}, method="GET", timeout=15.0)
-        
-        if isinstance(result, dict) and "error" in result:
-            logger.error(f"Failed to get skills: {result}")
-            return {"success": False, "error": result.get("error"), "skills": [], "count": 0}
-        
-        skills = result.get("skills", []) if isinstance(result, dict) else []
+        result = await manager.send_request(device_id, "skills.status", {}, method="GET", timeout=15.0)
+        payload = _rpc_payload(result)
+        raw_skills = payload.get("skills", []) if isinstance(payload, dict) else []
+        skills: List[Dict[str, Any]] = [
+            _normalize_skill(s) for s in raw_skills if isinstance(s, dict)
+        ]
         
         # 按来源分类
         categorized = {
@@ -60,20 +110,13 @@ async def list_skills(
         }
         
         for skill in skills:
-            source = skill.get("source", "")
-            status = skill.get("status", "missing")
-            
             # 过滤不可用
-            if filter_unavailable and status not in ("ready", "enabled"):
+            if filter_unavailable and not _is_skill_ready(skill):
                 continue
             
             # 分类
-            if "bundled" in source:
-                categorized["bundled"].append(skill)
-            elif "extra" in source:
-                categorized["extra"].append(skill)
-            elif "workspace" in source:
-                categorized["workspace"].append(skill)
+            group = _skill_source_group(skill)
+            categorized[group].append(skill)
         
         # 根据 category 过滤
         if category != SkillCategory.ALL:
@@ -91,7 +134,7 @@ async def list_skills(
             "success": True, 
             "skills": skills, 
             "count": len(skills) if isinstance(skills, list) else skills.get("all_count", 0),
-            "readyCount": sum(1 for s in skills if isinstance(skills, list) and s.get("status") == "ready") if isinstance(skills, list) else 0,
+            "readyCount": sum(1 for s in skills if isinstance(skills, list) and _is_skill_ready(s)) if isinstance(skills, list) else 0,
             "categories": {
                 "bundled": len(categorized["bundled"]),
                 "extra": len(categorized["extra"]),
@@ -112,22 +155,23 @@ async def check_skills(device_id: str = None, request: Request = None):
     try:
         db = get_db()
         await _require_user_device(db, request, device_id)
-        result = await manager.send_request(device_id, "skills.list", {}, method="GET", timeout=15.0)
-        
-        if isinstance(result, dict) and "error" in result:
-            return {"success": False, "error": result.get("error")}
-        
-        skills = result.get("skills", []) if isinstance(result, dict) else []
+        result = await manager.send_request(device_id, "skills.status", {}, method="GET", timeout=15.0)
+        payload = _rpc_payload(result)
+        raw_skills = payload.get("skills", []) if isinstance(payload, dict) else []
+        skills: List[Dict[str, Any]] = [
+            _normalize_skill(s) for s in raw_skills if isinstance(s, dict)
+        ]
         
         total = len(skills)
-        ready = sum(1 for s in skills if s.get("status") == "ready")
+        ready = sum(1 for s in skills if _is_skill_ready(s))
         missing = sum(1 for s in skills if s.get("status") == "missing")
         disabled = sum(1 for s in skills if s.get("status") == "disabled")
+        blocked = sum(1 for s in skills if s.get("status") == "blocked")
         
         # 按分类统计
-        bundled = [s["id"] for s in skills if "bundled" in s.get("source", "")]
-        extra = [s["id"] for s in skills if "extra" in s.get("source", "")]
-        workspace = [s["id"] for s in skills if "workspace" in s.get("source", "")]
+        bundled = [s["id"] for s in skills if _skill_source_group(s) == "bundled"]
+        extra = [s["id"] for s in skills if _skill_source_group(s) == "extra"]
+        workspace = [s["id"] for s in skills if _skill_source_group(s) == "workspace"]
         
         return {
             "success": True,
@@ -135,11 +179,12 @@ async def check_skills(device_id: str = None, request: Request = None):
             "readyCount": ready,
             "missingCount": missing,
             "disabledCount": disabled,
-            "readySkills": [s["id"] for s in skills if s.get("status") == "ready"],
+            "blockedCount": blocked,
+            "readySkills": [s["id"] for s in skills if _is_skill_ready(s)],
             "categories": {
-                "bundled": {"total": len(bundled), "ready": sum(1 for s in skills if "bundled" in s.get("source", "") and s.get("status") == "ready")},
-                "extra": {"total": len(extra), "ready": sum(1 for s in skills if "extra" in s.get("source", "") and s.get("status") == "ready")},
-                "workspace": {"total": len(workspace), "ready": sum(1 for s in skills if "workspace" in s.get("source", "") and s.get("status") == "ready")}
+                "bundled": {"total": len(bundled), "ready": sum(1 for s in skills if _skill_source_group(s) == "bundled" and _is_skill_ready(s))},
+                "extra": {"total": len(extra), "ready": sum(1 for s in skills if _skill_source_group(s) == "extra" and _is_skill_ready(s))},
+                "workspace": {"total": len(workspace), "ready": sum(1 for s in skills if _skill_source_group(s) == "workspace" and _is_skill_ready(s))}
             }
         }
     except Exception as e:
@@ -156,10 +201,15 @@ async def enable_skill(skill_id: str, device_id: str = None, request: Request = 
     try:
         db = get_db()
         await _require_user_device(db, request, device_id)
-        result = await manager.send_request(device_id, "skills.enable", {"skillId": skill_id}, timeout=10.0)
-        
-        if isinstance(result, dict) and "error" in result:
-            return {"success": False, "error": result.get("error")}
+        result = await manager.send_request(
+            device_id,
+            "skills.update",
+            {"skillKey": skill_id, "enabled": True},
+            timeout=10.0,
+        )
+        payload = _rpc_payload(result)
+        if isinstance(payload, dict) and payload.get("ok") is False:
+            return {"success": False, "error": payload}
         
         return {"success": True, "enabled": True}
     except Exception as e:
@@ -176,10 +226,15 @@ async def disable_skill(skill_id: str, device_id: str = None, request: Request =
     try:
         db = get_db()
         await _require_user_device(db, request, device_id)
-        result = await manager.send_request(device_id, "skills.disable", {"skillId": skill_id}, timeout=10.0)
-        
-        if isinstance(result, dict) and "error" in result:
-            return {"success": False, "error": result.get("error")}
+        result = await manager.send_request(
+            device_id,
+            "skills.update",
+            {"skillKey": skill_id, "enabled": False},
+            timeout=10.0,
+        )
+        payload = _rpc_payload(result)
+        if isinstance(payload, dict) and payload.get("ok") is False:
+            return {"success": False, "error": payload}
         
         return {"success": True, "enabled": False}
     except Exception as e:
@@ -196,13 +251,19 @@ async def get_skill(skill_id: str, device_id: str = None, request: Request = Non
     try:
         db = get_db()
         await _require_user_device(db, request, device_id)
-        result = await manager.send_request(device_id, "skills.list", {}, method="GET", timeout=15.0)
-        
-        if isinstance(result, dict) and "error" in result:
-            return {"success": False, "error": result.get("error")}
-        
-        skills = result.get("skills", []) if isinstance(result, dict) else []
-        skill = next((s for s in skills if s.get("id") == skill_id), None)
+        result = await manager.send_request(device_id, "skills.status", {}, method="GET", timeout=15.0)
+        payload = _rpc_payload(result)
+        raw_skills = payload.get("skills", []) if isinstance(payload, dict) else []
+        skills: List[Dict[str, Any]] = [
+            _normalize_skill(s) for s in raw_skills if isinstance(s, dict)
+        ]
+        skill = next(
+            (
+                s for s in skills
+                if s.get("id") == skill_id or s.get("skillKey") == skill_id or s.get("name") == skill_id
+            ),
+            None,
+        )
         
         if not skill:
             return {"success": False, "error": "Skill not found"}
