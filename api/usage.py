@@ -1,177 +1,142 @@
-"""
-用量统计 API - 调用设备端 Gateway
-"""
-from fastapi import APIRouter, HTTPException, Request
-from typing import Optional, Dict, Any
-from datetime import datetime, timedelta
+"""Usage 统计 API（顶层 /usage，底层调用设备 Gateway usage.* RPC）"""
 import logging
+from typing import Any, Dict, Optional
 
+from fastapi import APIRouter, HTTPException, Request
+
+from api._gateway import (
+    read_json_body,
+    require_user_device_access,
+    resolve_device_id,
+    rpc_data,
+    rpc_error_text,
+    rpc_payload,
+)
 from app.core.websocket import manager
-from api.proxy import _require_user_device
-from app.core.supabase import get_db
 
 router = APIRouter(prefix="/usage", tags=["用量统计"])
 logger = logging.getLogger(__name__)
 
 
+def _strip_device_id(data: Dict[str, Any]) -> Dict[str, Any]:
+    params = dict(data or {})
+    params.pop("device_id", None)
+    return params
+
+
+async def _forward_rpc(
+    request: Request,
+    method: str,
+    *,
+    device_id: Optional[str] = None,
+    body: Optional[Dict[str, Any]] = None,
+    params: Dict[str, Any] = None,
+    timeout: float = 15.0,
+) -> Dict[str, Any]:
+    if not request:
+        return {"success": False, "error": "device_id required"}
+
+    did = await resolve_device_id(device_id, request, body)
+    if not did:
+        return {"success": False, "error": "device_id required"}
+
+    try:
+        await require_user_device_access(request, did)
+        result = await manager.send_request(did, method, params or {}, timeout=timeout)
+        payload = rpc_payload(result)
+        err = rpc_error_text(payload)
+        if err:
+            return {"success": False, "error": err}
+        return {"success": True, "data": rpc_data(payload)}
+    except HTTPException as e:
+        detail = e.detail if isinstance(e.detail, str) else str(e.detail)
+        return {"success": False, "error": detail or str(e)}
+
+
+@router.post("/cost")
+async def usage_cost_post(device_id: str = None, request: Request = None):
+    """usage.cost：获取 token/cost 统计（POST）"""
+    body = await read_json_body(request)
+    params = _strip_device_id(body)
+    try:
+        result = await _forward_rpc(
+            request=request,
+            method="usage.cost",
+            device_id=device_id,
+            body=body,
+            params=params,
+            timeout=20.0,
+        )
+        if not result.get("success"):
+            return result
+        payload = dict(result.get("data") or {})
+        payload["success"] = True
+        return payload
+    except Exception as e:
+        logger.error("[usage.cost] %s", e)
+        return {"success": False, "error": str(e)}
+
+
+@router.get("/cost")
+async def usage_cost_get(device_id: str = None, request: Request = None):
+    """usage.cost：获取 token/cost 统计（GET）"""
+    if not request:
+        return {"success": False, "error": "device_id required"}
+
+    query = _strip_device_id(dict(request.query_params) if request.query_params else {})
+    try:
+        result = await _forward_rpc(
+            request=request,
+            method="usage.cost",
+            device_id=device_id,
+            params=query,
+            timeout=20.0,
+        )
+        if not result.get("success"):
+            return result
+        payload = dict(result.get("data") or {})
+        payload["success"] = True
+        return payload
+    except Exception as e:
+        logger.error("[usage.cost:get] %s", e)
+        return {"success": False, "error": str(e)}
+
+
+@router.get("/status")
+async def usage_status(device_id: str = None, request: Request = None):
+    """usage.status：获取 usage 提供方状态"""
+    try:
+        result = await _forward_rpc(
+            request=request,
+            method="usage.status",
+            device_id=device_id,
+            params={},
+        )
+        if not result.get("success"):
+            return result
+        payload = dict(result.get("data") or {})
+        payload["success"] = True
+        return payload
+    except Exception as e:
+        logger.error("[usage.status] %s", e)
+        return {"success": False, "error": str(e)}
+
+
 @router.get("/sessions/{session_key}")
-async def session_usage(
-    device_id: str = None,
-    session_key: str = None,
-    request: Request = None
-):
-    """获取指定会话的用量统计"""
-    if not device_id or not session_key or not request:
-        return {"success": False, "error": "device_id and session_key required"}
-    
+async def usage_session(session_key: str, device_id: str = None, request: Request = None):
+    """sessions.usage：获取单个会话用量"""
     try:
-        db = get_db()
-        await _require_user_device(db, request, device_id)
-        
-        result = await manager.send_request(
-            device_id, 
-            "sessions.usage", 
-            {"sessionKey": session_key},
-            timeout=10.0
+        result = await _forward_rpc(
+            request=request,
+            method="sessions.usage",
+            device_id=device_id,
+            params={"key": session_key},
+            timeout=10.0,
         )
-        
-        if isinstance(result, dict) and "error" in result:
-            return {"success": False, "error": result.get("error")}
-        
-        return {"success": True, "usage": result}
+        if not result.get("success"):
+            return result
+        data = result.get("data") if isinstance(result.get("data"), dict) else {}
+        return {"success": True, "usage": data}
     except Exception as e:
-        logger.error(f"Exception: {e}")
+        logger.error("[sessions.usage] %s", e)
         return {"success": False, "error": str(e)}
-
-
-@router.get("/summary")
-async def usage_summary(
-    device_id: str = None,
-    request: Request = None
-):
-    """获取用量汇总 - 所有会话的用量统计"""
-    if not device_id or not request:
-        return {"success": False, "error": "device_id required"}
-    
-    try:
-        db = get_db()
-        await _require_user_device(db, request, device_id)
-        
-        # 获取会话列表
-        sessions_result = await manager.send_request(
-            device_id,
-            "sessions.list",
-            {},
-            timeout=10.0
-        )
-        
-        sessions = sessions_result.get("sessions", []) if isinstance(sessions_result, dict) else []
-        
-        # 汇总所有用量
-        total_tokens = 0
-        total_requests = 0
-        session_usages = []
-        
-        for session in sessions[:10]:  # 取前10个会话
-            session_key = session.get("key")
-            if session_key:
-                try:
-                    usage_result = await manager.send_request(
-                        device_id,
-                        "sessions.usage",
-                        {"sessionKey": session_key},
-                        timeout=5.0
-                    )
-                    usage = usage_result if isinstance(usage_result, dict) else {}
-                    session_usages.append({
-                        "sessionKey": session_key,
-                        "label": session.get("label", session_key),
-                        "usage": usage
-                    })
-                    total_tokens += usage.get("total_tokens", 0)
-                    total_requests += usage.get("total_requests", 0)
-                except:
-                    pass
-        
-        return {
-            "success": True,
-            "summary": {
-                "totalTokens": total_tokens,
-                "totalRequests": total_requests,
-                "sessionsCount": len(sessions),
-                "sessions": session_usages
-            }
-        }
-    except Exception as e:
-        logger.error(f"Exception: {e}")
-        return {"success": False, "error": str(e)}
-
-
-@router.get("/models")
-async def model_usage(
-    device_id: str = None,
-    request: Request = None
-):
-    """获取各模型的用量统计"""
-    if not device_id or not request:
-        return {"success": False, "error": "device_id required"}
-    
-    try:
-        db = get_db()
-        await _require_user_device(db, request, device_id)
-        
-        # 获取模型列表
-        models_result = await manager.send_request(
-            device_id,
-            "models.list",
-            {},
-            timeout=10.0
-        )
-        
-        models = models_result.get("models", []) if isinstance(models_result, dict) else []
-        
-        # 简化返回 - 实际用量需要从会话统计中汇总
-        return {
-            "success": True,
-            "models": [
-                {
-                    "id": m.get("key"),
-                    "name": m.get("name"),
-                    "available": m.get("available", True),
-                    "tags": m.get("tags", [])
-                }
-                for m in models
-            ]
-        }
-    except Exception as e:
-        logger.error(f"Exception: {e}")
-        return {"success": False, "error": str(e)}
-
-
-@router.get("/quota")
-async def quota_info(
-    device_id: str = None,
-    request: Request = None
-):
-    """获取配额信息"""
-    if not device_id or not request:
-        return {"success": False, "error": "device_id required"}
-    
-    # TODO: 从计费系统获取真实配额
-    # 当前返回模拟数据
-    return {
-        "success": True,
-        "quota": {
-            "type": "free",  # free / pro / enterprise
-            "limit": {
-                "sessions": 100,
-                "storage": 1024,  # MB
-                "apiCalls": 10000
-            },
-            "used": {
-                "sessions": 3,
-                "storage": 50,
-                "apiCalls": 1500
-            }
-        }
-    }

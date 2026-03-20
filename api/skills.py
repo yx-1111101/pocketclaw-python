@@ -6,6 +6,10 @@ from typing import Optional, Dict, Any, List
 from enum import Enum
 import logging
 
+from api._gateway import norm_text as _norm_text
+from api._gateway import read_json_body as _read_json_body
+from api._gateway import resolve_device_id as _resolve_device_id
+from api._gateway import rpc_payload as _rpc_payload
 from app.core.websocket import manager
 from api.proxy import _require_user_device
 from app.core.supabase import get_db
@@ -14,14 +18,6 @@ router = APIRouter(prefix="/skills", tags=["skills"])
 device_router = APIRouter(prefix="/devices", tags=["设备-技能"])
 
 logger = logging.getLogger(__name__)
-
-
-def _rpc_payload(result: Dict[str, Any]) -> Dict[str, Any]:
-    """兼容 manager.send_request 的返回结构：{status, request_id, data}"""
-    if not isinstance(result, dict):
-        return {}
-    data = result.get("data")
-    return data if isinstance(data, dict) else {}
 
 
 def _derive_skill_status(skill: Dict[str, Any]) -> str:
@@ -77,11 +73,6 @@ def _skill_source_group(skill: Dict[str, Any]) -> str:
         return "extra"
     return "workspace"
 
-
-def _norm_text(value: Any) -> str:
-    return str(value or "").strip()
-
-
 def _extract_search_items(payload: Dict[str, Any]) -> List[Any]:
     if not isinstance(payload, dict):
         return []
@@ -136,26 +127,6 @@ def _normalize_search_item(item: Any) -> Optional[Dict[str, str]]:
         "description": description,
         "homepage": homepage,
     }
-
-
-async def _read_json_body(request: Request) -> Dict[str, Any]:
-    if not request:
-        return {}
-    try:
-        body = await request.json()
-        return body if isinstance(body, dict) else {}
-    except Exception:
-        return {}
-
-
-async def _resolve_device_id(device_id: Optional[str], request: Request) -> str:
-    """优先使用 query/path 的 device_id，缺失时回退读取 JSON body.device_id。"""
-    did = _norm_text(device_id)
-    if did:
-        return did
-    body = await _read_json_body(request)
-    return _norm_text(body.get("device_id"))
-
 
 async def _load_status_skills(device_id: str) -> List[Dict[str, Any]]:
     result = await manager.send_request(device_id, "skills.status", {}, method="GET", timeout=15.0)

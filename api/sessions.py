@@ -66,7 +66,8 @@ async def session_usage(device_id: str, session_key: str, request: Request):
     db = get_db()
     await _require_user_device(db, request, device_id)
     try:
-        result = await manager.send_request(device_id, "sessions.usage", {"sessionKey": session_key})
+        # 新版网关 sessions.usage 使用 key 参数
+        result = await manager.send_request(device_id, "sessions.usage", {"key": session_key})
         payload = result.get("data") or {}
         return {"success": True, "usage": payload}
     except HTTPException:

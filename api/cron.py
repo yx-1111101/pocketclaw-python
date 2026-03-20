@@ -3,43 +3,16 @@ from fastapi import APIRouter, Request
 from typing import Any, Dict, Optional
 import logging
 
+from api._gateway import norm_text as _norm_text
+from api._gateway import read_json_body as _read_json_body
+from api._gateway import resolve_device_id as _resolve_device_id
+from api._gateway import rpc_payload as _rpc_payload
 from app.core.websocket import manager
 from app.core.supabase import get_db
 from api.proxy import _require_user_device
 
 router = APIRouter(prefix="/cron", tags=["定时任务"])
 logger = logging.getLogger(__name__)
-
-
-def _rpc_payload(result: Dict[str, Any]) -> Dict[str, Any]:
-    if not isinstance(result, dict):
-        return {}
-    data = result.get("data")
-    return data if isinstance(data, dict) else {}
-
-
-def _norm_text(value: Any) -> str:
-    return str(value or "").strip()
-
-
-async def _read_json_body(request: Request) -> Dict[str, Any]:
-    if not request:
-        return {}
-    try:
-        body = await request.json()
-        return body if isinstance(body, dict) else {}
-    except Exception:
-        return {}
-
-
-async def _resolve_device_id(device_id: Optional[str], request: Request, body: Dict[str, Any] = None) -> str:
-    did = _norm_text(device_id)
-    if did:
-        return did
-    if isinstance(body, dict):
-        return _norm_text(body.get("device_id"))
-    parsed = await _read_json_body(request)
-    return _norm_text(parsed.get("device_id"))
 
 
 @router.get("")
