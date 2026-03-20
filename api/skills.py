@@ -177,14 +177,14 @@ async def list_skills(
     device_id: str = None, 
     request: Request = None,
     category: SkillCategory = SkillCategory.ALL,
-    filter_unavailable: bool = True
+    filter_unavailable: bool = False
 ):
     """获取技能列表 - 从设备端 Gateway 获取
     
     Args:
         device_id: 设备ID
         category: 过滤分类 (bundled/extra/workspace/all)
-        filter_unavailable: 是否过滤掉不可用的技能 (默认true)
+        filter_unavailable: 是否过滤掉不可用的技能 (默认false)
     """
     if not device_id or not request:
         return {"success": False, "error": "device_id required", "skills": [], "count": 0}
@@ -204,8 +204,10 @@ async def list_skills(
         }
         
         for skill in skills:
-            # 过滤不可用
-            if filter_unavailable and not _is_skill_ready(skill):
+            # 过滤“真正不可用”的技能：missing / blocked
+            # 注意 disabled 表示用户主动关闭，应保留并展示为“未启用”
+            status = str(skill.get("status") or "").lower()
+            if filter_unavailable and status in ("missing", "blocked"):
                 continue
             
             # 分类
