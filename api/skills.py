@@ -193,10 +193,10 @@ async def list_skills(
         db = get_db()
         await _require_user_device(db, request, device_id)
         skills = await _load_status_skills(device_id)
-        # 默认返回完整技能集合；仅在显式开启时过滤不可用技能。
-        if filter_unavailable:
-            skills = [s for s in skills if not _should_hide_skill(s)]
-        
+        # # 默认返回完整技能集合；仅在显式开启时过滤不可用技能。
+        # if filter_unavailable:
+        #     skills = [s for s in skills if not _should_hide_skill(s)]
+
         # 按来源分类
         categorized = {
             "bundled": [],    # 系统内置
