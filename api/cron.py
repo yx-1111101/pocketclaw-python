@@ -15,10 +15,20 @@ async def list_cron(device_id: str, request: Request):
     """获取所有 cron 任务"""
     db = get_db()
     await _require_user_device(db, request, device_id)
+    
+    # 检查设备是否在线
+    if not manager.is_connected(device_id):
+        return {
+            "success": True,
+            "jobs": [],
+            "offline": True,
+            "message": "设备离线"
+        }
+    
     try:
         result = await manager.send_request(device_id, "cron.list", {})
         payload = result.get("data") or {}
-        return {"success": True, "jobs": payload.get("jobs", [])}
+        return {"success": True, "jobs": payload.get("jobs", []), "offline": False}
     except HTTPException:
         raise
     except Exception as e:

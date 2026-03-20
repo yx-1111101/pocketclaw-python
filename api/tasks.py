@@ -25,6 +25,17 @@ async def list_tasks(device_id: str = None, request: Request = None):
     try:
         db = get_db()
         await _require_user_device(db, request, device_id)
+        
+        # 检查设备是否在线
+        if not manager.is_connected(device_id):
+            return {
+                "success": True,
+                "jobs": [],
+                "count": 0,
+                "offline": True,
+                "message": "设备离线，无法获取任务列表"
+            }
+        
         result = await manager.send_request(device_id, "cron.list", {}, method="GET", timeout=10.0)
         
         if isinstance(result, dict) and "error" in result:
@@ -37,11 +48,18 @@ async def list_tasks(device_id: str = None, request: Request = None):
             "success": True,
             "jobs": jobs,
             "count": len(jobs),
-            "total": result.get("total", len(jobs))
+            "total": result.get("total", len(jobs)),
+            "offline": False
         }
     except Exception as e:
         logger.error(f"Exception: {e}")
-        return {"success": False, "error": str(e), "jobs": [], "count": 0}
+        return {
+            "success": True,
+            "jobs": [],
+            "count": 0,
+            "error": str(e),
+            "message": "获取任务失败，请检查设备连接"
+        }
 
 
 @router.post("")
