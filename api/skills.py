@@ -193,8 +193,9 @@ async def list_skills(
         db = get_db()
         await _require_user_device(db, request, device_id)
         skills = await _load_status_skills(device_id)
-        # 后端统一过滤当前不可用技能，前端仅展示“已启用/未启用”
-        skills = [s for s in skills if not _should_hide_skill(s)]
+        # 默认返回完整技能集合；仅在显式开启时过滤不可用技能。
+        if filter_unavailable:
+            skills = [s for s in skills if not _should_hide_skill(s)]
         
         # 按来源分类
         categorized = {
@@ -243,7 +244,7 @@ async def list_skills(
 
 
 @router.get("/check")
-async def check_skills(device_id: str = None, request: Request = None):
+async def check_skills(device_id: str = None, request: Request = None, filter_unavailable: bool = False):
     """技能状态检查 - 从设备端 Gateway 获取"""
     if not device_id or not request:
         return {"success": False, "error": "device_id required"}
@@ -252,7 +253,8 @@ async def check_skills(device_id: str = None, request: Request = None):
         db = get_db()
         await _require_user_device(db, request, device_id)
         skills = await _load_status_skills(device_id)
-        skills = [s for s in skills if not _should_hide_skill(s)]
+        if filter_unavailable:
+            skills = [s for s in skills if not _should_hide_skill(s)]
         
         total = len(skills)
         ready = sum(1 for s in skills if _is_skill_ready(s))
@@ -399,7 +401,6 @@ async def get_skill(skill_id: str, device_id: str = None, request: Request = Non
         db = get_db()
         await _require_user_device(db, request, device_id)
         skills = await _load_status_skills(device_id)
-        skills = [s for s in skills if not _should_hide_skill(s)]
         skill = next(
             (
                 s for s in skills
