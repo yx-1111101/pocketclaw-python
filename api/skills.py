@@ -1,7 +1,7 @@
 """
 Skills 管理 API - 调用设备端 Gateway RPC
 """
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 from typing import Optional, Dict, Any, List
 from enum import Enum
 import logging
@@ -15,7 +15,6 @@ from api.proxy import _require_user_device
 from app.core.supabase import get_db
 
 router = APIRouter(prefix="/skills", tags=["skills"])
-device_router = APIRouter(prefix="/devices", tags=["设备-技能"])
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +134,44 @@ async def _load_status_skills(device_id: str) -> List[Dict[str, Any]]:
     return [_normalize_skill(s) for s in raw_skills if isinstance(s, dict)]
 
 
+async def _resolve_and_auth_device(
+    request: Request,
+    device_id: Optional[str] = None,
+    body: Dict[str, Any] = None,
+) -> str:
+    did = await _resolve_device_id(device_id, request, body)
+    if not did:
+        return ""
+    db = get_db()
+    await _require_user_device(db, request, did)
+    return did
+
+
+async def _set_skill_enabled(
+    skill_id: str,
+    enabled: bool,
+    request: Request,
+    device_id: Optional[str] = None,
+    body: Dict[str, Any] = None,
+):
+    if not request:
+        return {"success": False, "error": "device_id required"}
+    did = await _resolve_and_auth_device(request=request, device_id=device_id, body=body)
+    if not did:
+        return {"success": False, "error": "device_id required"}
+
+    result = await manager.send_request(
+        did,
+        "skills.update",
+        {"skillKey": skill_id, "enabled": bool(enabled)},
+        timeout=10.0,
+    )
+    payload = _rpc_payload(result)
+    if isinstance(payload, dict) and payload.get("ok") is False:
+        return {"success": False, "error": payload}
+    return {"success": True, "enabled": bool(enabled)}
+
+
 class SkillCategory(str, Enum):
     """技能分类"""
     BUNDLED = "bundled"       # 系统内置
@@ -157,12 +194,13 @@ async def list_skills(
         category: 过滤分类 (bundled/extra/workspace/all)
         filter_unavailable: 是否过滤掉不可用的技能 (默认false)
     """
-    if not device_id or not request:
+    if not request:
         return {"success": False, "error": "device_id required", "skills": [], "count": 0}
     
     try:
-        db = get_db()
-        await _require_user_device(db, request, device_id)
+        device_id = await _resolve_and_auth_device(request=request, device_id=device_id)
+        if not device_id:
+            return {"success": False, "error": "device_id required", "skills": [], "count": 0}
         skills = await _load_status_skills(device_id)
         # # 默认返回完整技能集合；仅在显式开启时过滤不可用技能。
         # if filter_unavailable:
@@ -217,12 +255,13 @@ async def list_skills(
 @router.get("/check")
 async def check_skills(device_id: str = None, request: Request = None, filter_unavailable: bool = False):
     """技能状态检查 - 从设备端 Gateway 获取"""
-    if not device_id or not request:
+    if not request:
         return {"success": False, "error": "device_id required"}
     
     try:
-        db = get_db()
-        await _require_user_device(db, request, device_id)
+        device_id = await _resolve_and_auth_device(request=request, device_id=device_id)
+        if not device_id:
+            return {"success": False, "error": "device_id required"}
         skills = await _load_status_skills(device_id)
         if filter_unavailable:
             skills = [s for s in skills if not _should_hide_skill(s)]
@@ -260,26 +299,13 @@ async def check_skills(device_id: str = None, request: Request = None, filter_un
 @router.post("/{skill_id}/enable")
 async def enable_skill(skill_id: str, device_id: str = None, request: Request = None):
     """启用技能"""
-    if not request:
-        return {"success": False, "error": "device_id required"}
-    
     try:
-        device_id = await _resolve_device_id(device_id, request)
-        if not device_id:
-            return {"success": False, "error": "device_id required"}
-        db = get_db()
-        await _require_user_device(db, request, device_id)
-        result = await manager.send_request(
-            device_id,
-            "skills.update",
-            {"skillKey": skill_id, "enabled": True},
-            timeout=10.0,
+        return await _set_skill_enabled(
+            skill_id=skill_id,
+            enabled=True,
+            request=request,
+            device_id=device_id,
         )
-        payload = _rpc_payload(result)
-        if isinstance(payload, dict) and payload.get("ok") is False:
-            return {"success": False, "error": payload}
-        
-        return {"success": True, "enabled": True}
     except Exception as e:
         logger.error(f"Exception: {e}")
         return {"success": False, "error": str(e)}
@@ -288,26 +314,35 @@ async def enable_skill(skill_id: str, device_id: str = None, request: Request = 
 @router.post("/{skill_id}/disable")
 async def disable_skill(skill_id: str, device_id: str = None, request: Request = None):
     """禁用技能"""
+    try:
+        return await _set_skill_enabled(
+            skill_id=skill_id,
+            enabled=False,
+            request=request,
+            device_id=device_id,
+        )
+    except Exception as e:
+        logger.error(f"Exception: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@router.patch("/{skill_id}")
+async def patch_skill(skill_id: str, device_id: str = None, request: Request = None):
+    """更新技能状态（当前仅支持 enabled）"""
     if not request:
         return {"success": False, "error": "device_id required"}
-    
     try:
-        device_id = await _resolve_device_id(device_id, request)
-        if not device_id:
-            return {"success": False, "error": "device_id required"}
-        db = get_db()
-        await _require_user_device(db, request, device_id)
-        result = await manager.send_request(
-            device_id,
-            "skills.update",
-            {"skillKey": skill_id, "enabled": False},
-            timeout=10.0,
+        body = await _read_json_body(request)
+        if "enabled" not in body:
+            return {"success": False, "error": "enabled required"}
+        enabled = bool(body.get("enabled"))
+        return await _set_skill_enabled(
+            skill_id=skill_id,
+            enabled=enabled,
+            request=request,
+            device_id=device_id,
+            body=body,
         )
-        payload = _rpc_payload(result)
-        if isinstance(payload, dict) and payload.get("ok") is False:
-            return {"success": False, "error": payload}
-        
-        return {"success": True, "enabled": False}
     except Exception as e:
         logger.error(f"Exception: {e}")
         return {"success": False, "error": str(e)}
@@ -321,7 +356,7 @@ async def search_skills(
     limit: int = 10,
 ):
     """搜索可安装技能（走设备 file-server 的 /skills/search）"""
-    if not device_id or not request:
+    if not request:
         return {"success": False, "error": "device_id required", "items": [], "count": 0}
 
     keyword = _norm_text(q)
@@ -331,8 +366,9 @@ async def search_skills(
     safe_limit = max(1, min(int(limit or 10), 30))
 
     try:
-        db = get_db()
-        await _require_user_device(db, request, device_id)
+        device_id = await _resolve_and_auth_device(request=request, device_id=device_id)
+        if not device_id:
+            return {"success": False, "error": "device_id required", "items": [], "count": 0}
 
         result = await manager.send_request(
             device_id,
@@ -365,12 +401,13 @@ async def search_skills(
 @router.get("/{skill_id}")
 async def get_skill(skill_id: str, device_id: str = None, request: Request = None):
     """获取技能详情"""
-    if not device_id or not request:
+    if not request:
         return {"success": False, "error": "device_id required"}
     
     try:
-        db = get_db()
-        await _require_user_device(db, request, device_id)
+        device_id = await _resolve_and_auth_device(request=request, device_id=device_id)
+        if not device_id:
+            return {"success": False, "error": "device_id required"}
         skills = await _load_status_skills(device_id)
         skill = next(
             (
@@ -390,21 +427,22 @@ async def get_skill(skill_id: str, device_id: str = None, request: Request = Non
 
 
 
+@router.post("/install")
 async def install_skill(device_id: str = None, request: Request = None):
     """安装新技能（走设备 file-server 的 /skills/install，底层由 ClawHub 处理）"""
-    if not device_id or not request:
+    if not request:
         return {"success": False, "error": "device_id required"}
 
     try:
         body = await _read_json_body(request)
+        device_id = await _resolve_and_auth_device(request=request, device_id=device_id, body=body)
+        if not device_id:
+            return {"success": False, "error": "device_id required"}
         skill_name = _norm_text(body.get("name"))
         if not skill_name:
             return {"success": False, "error": "name required"}
 
         version = _norm_text(body.get("version"))
-
-        db = get_db()
-        await _require_user_device(db, request, device_id)
 
         params: Dict[str, Any] = {"name": skill_name}
         if version:
@@ -434,13 +472,15 @@ async def install_skill(device_id: str = None, request: Request = None):
         return {"success": False, "error": str(e)}
 
 
+@router.delete("/{skill_id}")
 async def uninstall_skill(skill_id: str, device_id: str = None, request: Request = None):
     """当前网关不提供卸载 RPC，保留路由仅返回明确错误。"""
-    if not device_id or not request:
+    if not request:
         return {"success": False, "error": "device_id required"}
     try:
-        db = get_db()
-        await _require_user_device(db, request, device_id)
+        device_id = await _resolve_and_auth_device(request=request, device_id=device_id)
+        if not device_id:
+            return {"success": False, "error": "device_id required"}
         return {
             "success": False,
             "error": "uninstall_not_supported",
@@ -450,40 +490,3 @@ async def uninstall_skill(skill_id: str, device_id: str = None, request: Request
     except Exception as e:
         logger.error(f"Exception: {e}")
         return {"success": False, "error": str(e)}
-
-# ========== 设备前缀路由 (小程序调用) ==========
-
-@device_router.get("/{device_id}/skills")
-async def device_list_skills(device_id: str, request: Request):
-    """获取技能列表 - 设备前缀 (小程序调用)"""
-    # 直接复用 /skills 列表逻辑（底层走 skills.status）
-    return await list_skills(device_id=device_id, request=request)
-
-
-@device_router.post("/{device_id}/skills/install")
-async def device_install_skill(device_id: str, request: Request):
-    """安装技能"""
-    return await install_skill(device_id=device_id, request=request)
-
-
-@device_router.get("/{device_id}/skills/search")
-async def device_search_skills(
-    device_id: str,
-    request: Request,
-    q: str = "",
-    limit: int = 10,
-):
-    """搜索可安装技能（小程序调用）"""
-    return await search_skills(device_id=device_id, request=request, q=q, limit=limit)
-
-
-@device_router.delete("/{device_id}/skills/{skill_id}")
-async def device_uninstall_skill(device_id: str, skill_id: str, request: Request):
-    """卸载技能"""
-    return await uninstall_skill(skill_id=skill_id, device_id=device_id, request=request)
-
-
-@device_router.get("/{device_id}/skills/{skill_id}")
-async def device_get_skill(skill_id: str, device_id: str, request: Request):
-    """获取技能详情"""
-    return await get_skill(skill_id=skill_id, device_id=device_id, request=request)
