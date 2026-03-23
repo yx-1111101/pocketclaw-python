@@ -746,6 +746,16 @@ async def stream_websocket(
 
                     # 兜底：若设备直接同步返回结果而没有后续 stream 事件，直接回 stream_end 给客户端
                     final_text = _extract_chat_text(resp_data)
+                    logger.info(
+                        "[ws_stream] sync-check user_id=%s device_id=%s "
+                        "final_text_len=%s done_flag=%s run_id=%s resp_data_keys=%s resp_data_snippet=%s",
+                        user_id, device_id,
+                        len(final_text) if final_text else 0,
+                        done_flag,
+                        run_id_from_resp or "(empty)",
+                        list(resp_data.keys()) if isinstance(resp_data, dict) else type(resp_data).__name__,
+                        str(resp_data)[:300] if resp_data else "(none)",
+                    )
                     if final_text or done_flag or not run_id_from_resp:
                         request_id = (
                             (rpc_request_id or None)
@@ -753,7 +763,7 @@ async def stream_websocket(
                             or (resp_data.get("run_id") if isinstance(resp_data, dict) else None)
                             or uuid.uuid4().hex
                         )
-                        await websocket.send_text(json.dumps({
+                        stream_end_payload = {
                             "type": "stream_end",
                             "request_id": request_id,
                             "data": {
@@ -764,7 +774,12 @@ async def stream_websocket(
                                     else []
                                 ),
                             },
-                        }, ensure_ascii=False))
+                        }
+                        logger.info(
+                            "[ws_stream] SENDING stream_end user_id=%s device_id=%s request_id=%s content_len=%s",
+                            user_id, device_id, request_id, len(final_text) if final_text else 0,
+                        )
+                        await websocket.send_text(json.dumps(stream_end_payload, ensure_ascii=False))
 
                     if is_chat_req and req_id:
                         await websocket.send_text(json.dumps({
