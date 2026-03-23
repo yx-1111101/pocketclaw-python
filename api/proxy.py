@@ -165,15 +165,16 @@ async def _gateway_proxy_impl(device_id: str, path: str, request: Request):
             method=method,
             query=query_params,
         )
-        # 设备端可能返回二进制内容（例如 TTS 音频），会被封装成 {_file_b64, _content_type, _status}
-        # 注意：manager.send_request 返回的是 device 侧 response["data"]，不是外层 {"data": ...}
-        if isinstance(result, dict) and isinstance(result.get("_file_b64"), str):
+        # send_request 返回 {"status": "success", "request_id": "...", "data": <设备数据>}
+        # 设备端二进制内容封装在 data 里：{_file_b64, _content_type, _status}
+        inner = result.get("data") if isinstance(result, dict) and "data" in result else result
+        if isinstance(inner, dict) and isinstance(inner.get("_file_b64"), str):
             try:
-                raw = base64.b64decode(result.get("_file_b64") or "")
+                raw = base64.b64decode(inner.get("_file_b64") or "")
             except Exception:
                 raw = b""
-            media_type = str(result.get("_content_type") or "application/octet-stream")
-            status = int(result.get("_status") or 200)
+            media_type = str(inner.get("_content_type") or "application/octet-stream")
+            status = int(inner.get("_status") or 200)
             return Response(content=raw, media_type=media_type, status_code=status)
         return result
     except HTTPException:
