@@ -746,7 +746,7 @@ async def stream_websocket(
 
                     # 兜底：若设备直接同步返回结果而没有后续 stream 事件，直接回 stream_end 给客户端
                     final_text = _extract_chat_text(resp_data)
-                    if final_text or done_flag:
+                    if final_text or done_flag or not run_id_from_resp:
                         request_id = (
                             (rpc_request_id or None)
                             or (resp_data.get("runId") if isinstance(resp_data, dict) else None)
