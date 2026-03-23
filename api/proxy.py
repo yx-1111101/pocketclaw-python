@@ -195,3 +195,15 @@ async def gateway_proxy_put(device_id: str, path: str, request: Request):
 @router.delete("/{device_id}/gateway/{path:path}")
 async def gateway_proxy_delete(device_id: str, path: str, request: Request):
     return await _gateway_proxy_impl(device_id, path, request)
+
+@router.patch("/{device_id}/gateway/{path:path}")
+async def gateway_proxy_patch(device_id: str, path: str, request: Request):
+    return await _gateway_proxy_impl(device_id, path, request)
+
+@router.options("/{device_id}/gateway/{path:path}")
+async def gateway_proxy_options(device_id: str, path: str, request: Request):
+    return await _gateway_proxy_impl(device_id, path, request)
+
+@router.head("/{device_id}/gateway/{path:path}")
+async def gateway_proxy_head(device_id: str, path: str, request: Request):
+    return await _gateway_proxy_impl(device_id, path, request)
