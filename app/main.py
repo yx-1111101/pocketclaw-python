@@ -961,4 +961,4 @@ async def static_files(path: str):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=PORT, ws_max_size=2 * 1024 * 1024)
+    uvicorn.run(app, host="0.0.0.0", port=PORT)
