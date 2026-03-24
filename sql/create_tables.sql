@@ -202,8 +202,8 @@ PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 -- Table: llm_usage
 -- ==========================
 CREATE TABLE IF NOT EXISTS llm_usage (
-    user_id VARCHAR(255) NOT NULL,
-    device_id VARCHAR(255) NOT NULL,
+    user_id VARCHAR(64) NOT NULL,
+    device_id VARCHAR(64) NOT NULL,
     model VARCHAR(255) NOT NULL,
     provider VARCHAR(255) NOT NULL,
     request_type VARCHAR(50) NOT NULL DEFAULT 'openai',
