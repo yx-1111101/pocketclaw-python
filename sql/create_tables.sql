@@ -1,8 +1,8 @@
 
+
 -- ==========================
 -- Table: users
 -- ==========================
-
 CREATE TABLE IF NOT EXISTS users (
     user_id VARCHAR(255) NOT NULL,
     openid VARCHAR(255) NULL,
@@ -13,7 +13,9 @@ CREATE TABLE IF NOT EXISTS users (
     updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (user_id),
     UNIQUE KEY users_openid_key (openid)
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE INDEX idx_users_user_id ON users(user_id);
 
 -- ==========================
 -- Table: devices
@@ -33,7 +35,7 @@ CREATE TABLE IF NOT EXISTS devices (
     updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (device_id),
     UNIQUE KEY devices_device_id_key (device_id)
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE INDEX idx_devices_device_id ON devices(device_id);
 CREATE INDEX idx_devices_status ON devices(status);
@@ -42,14 +44,14 @@ CREATE INDEX idx_devices_status ON devices(status);
 -- Table: device_bindings
 -- ==========================
 CREATE TABLE IF NOT EXISTS device_bindings (
-    id CHAR(36) NOT NULL DEFAULT (UUID()),
+    id CHAR(36) NOT NULL DEFAULT UUID(),
     user_id VARCHAR(255) NOT NULL,
     device_id VARCHAR(255) NOT NULL,
     role VARCHAR(50) NULL DEFAULT 'owner',
     created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
     UNIQUE KEY device_bindings_user_id_device_id_key (user_id, device_id)
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE INDEX idx_device_bindings_device ON device_bindings(device_id);
 CREATE INDEX idx_device_bindings_user ON device_bindings(user_id);
@@ -58,14 +60,14 @@ CREATE INDEX idx_device_bindings_user ON device_bindings(user_id);
 -- Table: chat_messages
 -- ==========================
 CREATE TABLE IF NOT EXISTS chat_messages (
-    id CHAR(36) NOT NULL DEFAULT (UUID()),
+    id CHAR(36) NOT NULL DEFAULT UUID(),
     device_id CHAR(36) NULL,
     role VARCHAR(50) NOT NULL,
     content TEXT NOT NULL,
     model VARCHAR(255) NULL,
     created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (id)
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE INDEX idx_chat_messages_device ON chat_messages(device_id);
 CREATE INDEX idx_chat_messages_created ON chat_messages(created_at);
@@ -87,7 +89,7 @@ CREATE TABLE IF NOT EXISTS llm_proxy_log (
     cost_cny DECIMAL(18,8) NOT NULL DEFAULT 0,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (id)
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE INDEX idx_llm_proxy_log_device_id ON llm_proxy_log(device_id);
 CREATE INDEX idx_llm_proxy_log_user_id ON llm_proxy_log(user_id);
@@ -113,7 +115,7 @@ CREATE TABLE IF NOT EXISTS llm_usage (
     first_used_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     last_used_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (user_id, device_id, model, provider, request_type)
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE INDEX idx_llm_usage_user_id ON llm_usage(user_id);
 CREATE INDEX idx_llm_usage_device_id ON llm_usage(device_id);
@@ -133,7 +135,7 @@ CREATE TABLE IF NOT EXISTS llm_pricing (
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (model, provider, request_type)
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- ==========================
 -- Table: llm_credit
@@ -143,6 +145,5 @@ CREATE TABLE IF NOT EXISTS llm_credit (
     balance DECIMAL(18,8) NOT NULL DEFAULT 0,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (user_id),
-    CHECK (balance >= 0)
-);
+    PRIMARY KEY (user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
