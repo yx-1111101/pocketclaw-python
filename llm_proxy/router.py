@@ -1,5 +1,5 @@
 """LLM 代理路由"""
-from typing import AsyncIterator, Optional, Tuple
+from typing import Any, AsyncIterator, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -22,6 +22,11 @@ class ChatRequest(BaseModel):
     temperature: Optional[float] = None
     max_tokens: Optional[int] = None
     stream: Optional[bool] = False
+    tools: Optional[list] = None
+    tool_choice: Optional[Any] = None
+
+    class Config:
+        extra = "allow"   # forward any future fields without code changes
 
 
 class ChatResponse(BaseModel):
@@ -67,6 +72,10 @@ async def chat_completions(
         kwargs["temperature"] = temperature
     if max_tokens is not None:
         kwargs["max_tokens"] = max_tokens
+    if request.tools is not None:
+        kwargs["tools"] = request.tools
+    if request.tool_choice is not None:
+        kwargs["tool_choice"] = request.tool_choice
 
     # 5a. 流式响应
     if request.stream:
