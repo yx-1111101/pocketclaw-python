@@ -140,7 +140,7 @@ CREATE TABLE IF NOT EXISTS llm_proxy_log (
     model VARCHAR(255) NOT NULL,
     provider VARCHAR(255) NOT NULL,
     request_type VARCHAR(50) NOT NULL DEFAULT 'openai',
-    usage JSON NOT NULL,
+    token_usage JSON NOT NULL,
     cost_original DECIMAL(18,8) NOT NULL DEFAULT 0,
     cost_currency VARCHAR(10) NOT NULL DEFAULT 'USD',
     cost_cny DECIMAL(18,8) NOT NULL DEFAULT 0,
