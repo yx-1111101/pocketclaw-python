@@ -19,14 +19,13 @@ CREATE TABLE IF NOT EXISTS users (
     UNIQUE KEY users_openid_key (openid)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- Users index example (skip if exists)
+-- Users indexes
 SET @tbl := 'users';
 SET @idx := 'idx_users_openid';
 SET @sql := IF(
-    (SELECT COUNT(*) 
-     FROM INFORMATION_SCHEMA.STATISTICS
-     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=@tbl AND INDEX_NAME=@idx) = 0,
-    CONCAT('CREATE INDEX ', @idx, ' ON ', @tbl, ' (openid)'),
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=@tbl AND INDEX_NAME=@idx)=0,
+    CONCAT('CREATE INDEX ', @idx, ' ON ', @tbl, '(openid)'),
     'SELECT "Index exists, skipped"');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
@@ -55,7 +54,7 @@ SET @tbl := 'devices';
 SET @idx := 'idx_devices_device_id';
 SET @sql := IF(
     (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
-     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=@tbl AND INDEX_NAME=@idx) = 0,
+     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=@tbl AND INDEX_NAME=@idx)=0,
     CONCAT('CREATE INDEX ', @idx, ' ON ', @tbl, '(device_id)'),
     'SELECT "Index exists, skipped"');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
@@ -63,7 +62,7 @@ PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 SET @idx := 'idx_devices_status';
 SET @sql := IF(
     (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
-     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=@tbl AND INDEX_NAME=@idx) = 0,
+     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=@tbl AND INDEX_NAME=@idx)=0,
     CONCAT('CREATE INDEX ', @idx, ' ON ', @tbl, '(status)'),
     'SELECT "Index exists, skipped"');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
@@ -72,7 +71,7 @@ PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 -- Table: device_bindings
 -- ==========================
 CREATE TABLE IF NOT EXISTS device_bindings (
-    id CHAR(36) NOT NULL DEFAULT UUID(),
+    id BIGINT NOT NULL AUTO_INCREMENT,
     user_id VARCHAR(255) NOT NULL,
     device_id VARCHAR(255) NOT NULL,
     role VARCHAR(50) NULL DEFAULT 'owner',
@@ -86,7 +85,7 @@ SET @tbl := 'device_bindings';
 SET @idx := 'idx_device_bindings_device';
 SET @sql := IF(
     (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
-     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=@tbl AND INDEX_NAME=@idx) = 0,
+     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=@tbl AND INDEX_NAME=@idx)=0,
     CONCAT('CREATE INDEX ', @idx, ' ON ', @tbl, '(device_id)'),
     'SELECT "Index exists, skipped"');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
@@ -94,7 +93,7 @@ PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 SET @idx := 'idx_device_bindings_user';
 SET @sql := IF(
     (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
-     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=@tbl AND INDEX_NAME=@idx) = 0,
+     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=@tbl AND INDEX_NAME=@idx)=0,
     CONCAT('CREATE INDEX ', @idx, ' ON ', @tbl, '(user_id)'),
     'SELECT "Index exists, skipped"');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
@@ -103,8 +102,8 @@ PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 -- Table: chat_messages
 -- ==========================
 CREATE TABLE IF NOT EXISTS chat_messages (
-    id CHAR(36) NOT NULL DEFAULT UUID(),
-    device_id CHAR(36) NULL,
+    id BIGINT NOT NULL AUTO_INCREMENT,
+    device_id BIGINT NULL,
     role VARCHAR(50) NOT NULL,
     content TEXT NOT NULL,
     model VARCHAR(255) NULL,
@@ -117,7 +116,7 @@ SET @tbl := 'chat_messages';
 SET @idx := 'idx_chat_messages_device';
 SET @sql := IF(
     (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
-     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=@tbl AND INDEX_NAME=@idx) = 0,
+     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=@tbl AND INDEX_NAME=@idx)=0,
     CONCAT('CREATE INDEX ', @idx, ' ON ', @tbl, '(device_id)'),
     'SELECT "Index exists, skipped"');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
@@ -125,7 +124,7 @@ PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 SET @idx := 'idx_chat_messages_created';
 SET @sql := IF(
     (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
-     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=@tbl AND INDEX_NAME=@idx) = 0,
+     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=@tbl AND INDEX_NAME=@idx)=0,
     CONCAT('CREATE INDEX ', @idx, ' ON ', @tbl, '(created_at)'),
     'SELECT "Index exists, skipped"');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
@@ -154,7 +153,7 @@ SET @tbl := 'llm_proxy_log';
 SET @idx := 'idx_llm_proxy_log_device_id';
 SET @sql := IF(
     (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
-     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=@tbl AND INDEX_NAME=@idx) = 0,
+     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=@tbl AND INDEX_NAME=@idx)=0,
     CONCAT('CREATE INDEX ', @idx, ' ON ', @tbl, '(device_id)'),
     'SELECT "Index exists, skipped"');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
@@ -162,7 +161,7 @@ PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 SET @idx := 'idx_llm_proxy_log_user_id';
 SET @sql := IF(
     (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
-     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=@tbl AND INDEX_NAME=@idx) = 0,
+     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=@tbl AND INDEX_NAME=@idx)=0,
     CONCAT('CREATE INDEX ', @idx, ' ON ', @tbl, '(user_id)'),
     'SELECT "Index exists, skipped"');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
@@ -170,7 +169,7 @@ PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 SET @idx := 'idx_llm_proxy_log_timestamp';
 SET @sql := IF(
     (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
-     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=@tbl AND INDEX_NAME=@idx) = 0,
+     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=@tbl AND INDEX_NAME=@idx)=0,
     CONCAT('CREATE INDEX ', @idx, ' ON ', @tbl, '(timestamp)'),
     'SELECT "Index exists, skipped"');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
@@ -178,7 +177,7 @@ PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 SET @idx := 'idx_llm_proxy_log_model';
 SET @sql := IF(
     (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
-     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=@tbl AND INDEX_NAME=@idx) = 0,
+     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=@tbl AND INDEX_NAME=@idx)=0,
     CONCAT('CREATE INDEX ', @idx, ' ON ', @tbl, '(model)'),
     'SELECT "Index exists, skipped"');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
@@ -186,7 +185,7 @@ PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 SET @idx := 'idx_llm_proxy_log_provider';
 SET @sql := IF(
     (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
-     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=@tbl AND INDEX_NAME=@idx) = 0,
+     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=@tbl AND INDEX_NAME=@idx)=0,
     CONCAT('CREATE INDEX ', @idx, ' ON ', @tbl, '(provider)'),
     'SELECT "Index exists, skipped"');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
@@ -194,7 +193,7 @@ PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 SET @idx := 'idx_llm_proxy_log_request_type';
 SET @sql := IF(
     (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
-     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=@tbl AND INDEX_NAME=@idx) = 0,
+     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=@tbl AND INDEX_NAME=@idx)=0,
     CONCAT('CREATE INDEX ', @idx, ' ON ', @tbl, '(request_type)'),
     'SELECT "Index exists, skipped"');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
@@ -218,12 +217,12 @@ CREATE TABLE IF NOT EXISTS llm_usage (
     PRIMARY KEY (user_id, device_id, model, provider, request_type)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- Indexes
+-- llm_usage indexes
 SET @tbl := 'llm_usage';
 SET @idx := 'idx_llm_usage_user_id';
 SET @sql := IF(
     (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
-     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=@tbl AND INDEX_NAME=@idx) = 0,
+     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=@tbl AND INDEX_NAME=@idx)=0,
     CONCAT('CREATE INDEX ', @idx, ' ON ', @tbl, '(user_id)'),
     'SELECT "Index exists, skipped"');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
@@ -231,7 +230,7 @@ PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 SET @idx := 'idx_llm_usage_device_id';
 SET @sql := IF(
     (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
-     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=@tbl AND INDEX_NAME=@idx) = 0,
+     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=@tbl AND INDEX_NAME=@idx)=0,
     CONCAT('CREATE INDEX ', @idx, ' ON ', @tbl, '(device_id)'),
     'SELECT "Index exists, skipped"');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
@@ -239,7 +238,7 @@ PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 SET @idx := 'idx_llm_usage_model';
 SET @sql := IF(
     (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
-     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=@tbl AND INDEX_NAME=@idx) = 0,
+     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=@tbl AND INDEX_NAME=@idx)=0,
     CONCAT('CREATE INDEX ', @idx, ' ON ', @tbl, '(model)'),
     'SELECT "Index exists, skipped"');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
@@ -247,7 +246,7 @@ PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 SET @idx := 'idx_llm_usage_provider';
 SET @sql := IF(
     (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
-     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=@tbl AND INDEX_NAME=@idx) = 0,
+     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=@tbl AND INDEX_NAME=@idx)=0,
     CONCAT('CREATE INDEX ', @idx, ' ON ', @tbl, '(provider)'),
     'SELECT "Index exists, skipped"');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
