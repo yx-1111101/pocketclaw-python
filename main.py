@@ -26,7 +26,6 @@ MYSQL_PORT = int(os.getenv("MYSQL_PORT", "3306"))
 MYSQL_USER = os.getenv("MYSQL_USER", "root")
 MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "")
 MYSQL_DB = os.getenv("MYSQL_DB", "openfriday")
-DEFAULT_TOKEN = os.getenv("GATEWAY_TOKEN", "39353e14566ccc5caf8f6d588366b27a81f005e28b81b68c")
 
 db = MySQLClient(MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DB)
 
@@ -283,8 +282,8 @@ async def gateway_proxy_plural(device_id: str, path: str, request: Request):
     return await gateway_proxy(device_id, path, request)
 
 # ============== 微信登录 ==============
-WECHAT_APP_ID = os.getenv("WECHAT_APP_ID", "wxc6ee0aee83c794e7")
-WECHAT_APP_SECRET = os.getenv("WECHAT_APP_SECRET", "1264e0e7f7a90e65a92061355873bb37")
+WECHAT_APP_ID = os.getenv("WECHAT_APP_ID", "")
+WECHAT_APP_SECRET = os.getenv("WECHAT_APP_SECRET", "")
 
 class WechatLoginRequest(BaseModel):
     code: str

@@ -8,6 +8,10 @@ __pycache__/
 venv/
 env/
 
+# Environmental Variables
+.env
+!.env.example
+
 # Distribution / packaging
 *.egg-info/
 dist/

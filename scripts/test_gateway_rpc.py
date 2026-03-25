@@ -9,15 +9,16 @@ OpenClaw Gateway WebSocket RPC 测试脚本
     pip install websocket-client
 """
 
+import os
 import websocket
 import json
 import time
 import uuid
 
-# Gateway 配置
-GATEWAY_HOST = "10.110.130.86"
-GATEWAY_PORT = 18789
-TOKEN = "29b13a0b3aa82a3ea9d35914edb535772181ca07e9782ea5"
+# Gateway 配置 (set via environment variables or edit below for local testing)
+GATEWAY_HOST = os.getenv("GATEWAY_HOST", "127.0.0.1")
+GATEWAY_PORT = int(os.getenv("GATEWAY_PORT", "18789"))
+TOKEN = os.getenv("GATEWAY_TOKEN", "")
 
 URL = f"ws://{GATEWAY_HOST}:{GATEWAY_PORT}/ws?token={TOKEN}"
 

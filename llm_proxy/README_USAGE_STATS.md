@@ -4,7 +4,7 @@ This module provides usage tracking and cost calculation for the LLM proxy servi
 
 ## Features
 
-- Log all proxy requests to Supabase
+- Log all proxy requests to MySQL
 - Track token usage (prompt, completion, total)
 - Calculate costs based on model pricing
 - Support for multiple LLM providers (OpenAI, Anthropic, etc.)
@@ -21,34 +21,48 @@ Columns:
 - `timestamp`: Request timestamp
 - `model`: Model name used
 - `provider`: Provider name
-- `usage`: JSONB containing token counts and cost
+- `request_type`: Request type (e.g. `openai`)
+- `token_usage`: JSON containing token counts
+- `cost_original`: Cost in original currency
+- `cost_currency`: Currency code (e.g. `USD`)
+- `cost_cny`: Cost in CNY
 - `created_at`: Record creation time
 
 ### llm_usage
-Stores pricing information for LLM models.
+Aggregated usage statistics per user/device/model.
 
 Columns:
-- `id`: Primary key
-- `model`: Model name (unique)
-- `pricing`: JSONB with input/output prices per 1M tokens
-- `updated_at`: Last update time
-- `created_at`: Record creation time
+- `user_id`, `device_id`, `model`, `provider`, `request_type`: Composite primary key
+- `request_count`: Total number of requests
+- `prompt_tokens`, `completion_tokens`, `total_tokens`: Accumulated token counts
+- `total_cost`: Accumulated cost in CNY
+- `first_used_at`, `last_used_at`: Usage timestamps
+
+### llm_pricing
+Pricing information for LLM models.
+
+Columns:
+- `model`, `provider`, `request_type`: Composite primary key
+- `currency_type`: Currency (e.g. `USD`)
+- `input_price`, `output_price`: Price per 1M tokens
+- `updated_at`, `created_at`: Timestamps
 
 ## Setup
 
 1. Create the database tables:
 ```bash
-psql -h <host> -U <user> -d <database> -f llm_proxy/sql/create_tables.sql
+mysql -h <host> -u <user> -p <database> < sql/create_tables.sql
 ```
 
 2. Load pricing data:
 ```bash
-export SUPABASE_URL="https://your-project.supabase.co"
-export SUPABASE_KEY="your-service-role-key"
+export MYSQL_HOST="localhost"
+export MYSQL_PORT="3306"
+export MYSQL_USER="root"
+export MYSQL_PASSWORD="your-password"
+export MYSQL_DB="openfriday"
 python llm_proxy/load_pricing.py [path/to/pricing.yaml]
 ```
-
-Default pricing file: `/home/xuyz20/model_router/config/pricing.yaml`
 
 ## Usage
 
@@ -58,7 +72,7 @@ The usage tracking is automatically integrated into the proxy. Every request to 
 2. Extract usage information from the response
 3. Look up pricing for the model
 4. Calculate cost
-5. Log to `llm_proxy_log` table
+5. Log to `llm_proxy_log` table and upsert aggregated stats into `llm_usage`
 
 ## Adding New Providers
 
@@ -71,7 +85,7 @@ class NewProviderUsageExtractor:
         # Extract tokens from provider-specific response format
         return {
             "prompt_tokens": ...,
-         "completion_tokens": ...,
+            "completion_tokens": ...,
             "total_tokens": ...,
         }
 ```

@@ -1,4 +1,6 @@
 """FastAPI 应用入口"""
+from dotenv import load_dotenv
+load_dotenv()
 import asyncio
 import json
 import logging
@@ -13,7 +15,15 @@ from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime, timezone
 
-from app.config import PORT, REDIS_HOST, REDIS_PORT, REDIS_DB, MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DB
+PORT = int(os.getenv("PORT", "8764"))
+MYSQL_HOST = os.getenv("MYSQL_HOST", "localhost")
+MYSQL_PORT = int(os.getenv("MYSQL_PORT", "3306"))
+MYSQL_USER = os.getenv("MYSQL_USER", "root")
+MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "")
+MYSQL_DB = os.getenv("MYSQL_DB", "openfriday")
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
+REDIS_DB = int(os.getenv("REDIS_DB", "0"))
 from app.core.security import parse_auth_token, parse_user_from_auth_header
 from app.core.db import get_db, init_db
 from app.core.redis_cache import init_cache

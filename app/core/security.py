@@ -6,7 +6,7 @@ import json
 import time
 from typing import Optional, Tuple
 
-from app.config import DEFAULT_TOKEN
+import os
 
 
 def hash_sha256(data: str) -> str:
@@ -23,7 +23,10 @@ def _b64url_decode(raw: str) -> bytes:
 
 
 def _token_secret() -> bytes:
-    return str(DEFAULT_TOKEN or "").encode()
+    secret = os.getenv("JWT_SECRET")
+    if not secret:
+        raise RuntimeError("JWT_SECRET env var is required for token signing but is not set")
+    return secret.encode()
 
 
 def make_auth_token(user_id: str, ttl_seconds: int = 30 * 24 * 60 * 60) -> str:

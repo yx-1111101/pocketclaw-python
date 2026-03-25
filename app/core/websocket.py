@@ -1,6 +1,5 @@
 """WebSocket 连接管理"""
 import logging
-import os
 import json
 import uuid
 import asyncio
@@ -8,7 +7,6 @@ from typing import Dict, Optional
 from fastapi import WebSocket
 
 logger = logging.getLogger("uvicorn.error")
-GATEWAY_TOKEN = os.getenv("GATEWAY_TOKEN", "39353e14566ccc5caf8f6d588366b27a81f005e28b81b68c")
 
 # 普通 API 调用超时（状态查询、文件等）
 DEFAULT_TIMEOUT = 30.0
@@ -89,12 +87,24 @@ class ConnectionManager:
         if headers:
             payload_params["_headers"] = headers
 
+        # Load gateway_token per-device from DB
+        gateway_token = None
+        try:
+            from app.core.db import get_db
+            db = get_db()
+            rows = await db.get("devices", {"device_id": device_id})
+            if rows and not isinstance(rows, dict):
+                gateway_token = rows[0].get("device_secret_hash")
+        except Exception:
+            pass
+
         payload = {
             "request_id": request_id,
             "function": function,
             "params": payload_params,
-            "gateway_token": GATEWAY_TOKEN,
         }
+        if gateway_token:
+            payload["gateway_token"] = gateway_token
 
         if timeout is None:
             timeout = CHAT_TIMEOUT if function in CHAT_PATHS else DEFAULT_TIMEOUT
