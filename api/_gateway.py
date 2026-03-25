@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional
 from fastapi import HTTPException, Request
 
 from api.proxy import _require_user_device
-from app.core.supabase import get_db
+from app.core.db import get_db
 from app.core.websocket import manager
 
 

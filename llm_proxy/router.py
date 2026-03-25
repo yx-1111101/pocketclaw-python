@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from llm_proxy.auth import verify_device_auth
 from llm_proxy.exchange_rate import get_usd_to_cny, convert_to_cny
 from llm_proxy.providers import registry, resolve
-from llm_proxy.supabase_client import get_device_binding, log_proxy_request, get_pricing
+from llm_proxy.db_client import get_device_binding, log_proxy_request, get_pricing
 from llm_proxy.usage_stats import calculator
 
 router = APIRouter(prefix="/llm", tags=["LLM代理"])

@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from app.core.security import hash_sha256, parse_user_from_auth_header
-from app.core.supabase import get_db
+from app.core.db import get_db
 from app.models.schemas import BindRequest, HeartbeatRequest
 
 router = APIRouter(prefix="/devices", tags=["设备"])

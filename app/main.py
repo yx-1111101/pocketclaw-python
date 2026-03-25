@@ -13,15 +13,15 @@ from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime, timezone
 
-from app.config import PORT, REDIS_HOST, REDIS_PORT, REDIS_DB, SUPABASE_URL, SUPABASE_KEY
+from app.config import PORT, REDIS_HOST, REDIS_PORT, REDIS_DB, MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DB
 from app.core.security import parse_auth_token, parse_user_from_auth_header
-from app.core.supabase import get_db, init_db
+from app.core.db import get_db, init_db
 from app.core.redis_cache import init_cache
 from app.core.websocket import manager
 from api import device, wechat, proxy, cron, skills, sessions, models, channels, mcp, tools, usage, billing
 
-# 初始化 Supabase（持久化存储）和 Redis（缓存）
-init_db(SUPABASE_URL, SUPABASE_KEY)
+# 初始化 MySQL（持久化存储）和 Redis（缓存）
+init_db(MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DB)
 init_cache(REDIS_HOST, REDIS_PORT, REDIS_DB)
 logger = logging.getLogger("uvicorn.error")
 STRICT_STREAM_ROUTING = os.getenv("STRICT_STREAM_ROUTING", "1").strip().lower() not in ("0", "false", "no")

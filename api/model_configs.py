@@ -4,7 +4,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from app.core.supabase import get_db
+from app.core.db import get_db
 from app.core.websocket import manager
 from api.proxy import _require_user_device
 

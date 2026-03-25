@@ -8,7 +8,7 @@ from api._gateway import read_json_body as _read_json_body
 from api._gateway import resolve_device_id as _resolve_device_id
 from api._gateway import rpc_payload as _rpc_payload
 from app.core.websocket import manager
-from app.core.supabase import get_db
+from app.core.db import get_db
 from api.proxy import _require_user_device
 
 router = APIRouter(prefix="/cron", tags=["定时任务"])

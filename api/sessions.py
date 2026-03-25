@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from typing import Optional
 
 from app.core.websocket import manager
-from app.core.supabase import get_db
+from app.core.db import get_db
 from api.proxy import _require_user_device
 
 router = APIRouter(prefix="/devices", tags=["会话管理"])

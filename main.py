@@ -1,6 +1,6 @@
 """
 PocketClaw Cloud Service
-基于 FastAPI + WebSocket + Supabase 的设备内网穿透服务
+基于 FastAPI + WebSocket + MySQL 的设备内网穿透服务
 """
 import json
 import os
@@ -17,72 +17,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
 
+from app.core.db import MySQLClient
+
 # ============== 配置 ==============
 PORT = int(os.getenv("PORT", 8764))
-SUPABASE_URL = os.getenv("SUPABASE_URL", "https://irbnhwtyhzltpjiuuyql.supabase.co")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlyYm5od3R5aHpsdHBqaXV1eXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MzMzMDc3NCwiZXhwIjoyMDg4OTA2Nzc0fQ.u0qwNGdrtniSxIlihYKpbM6HWh10UXlxPCE4y8-8Blk")
+MYSQL_HOST = os.getenv("MYSQL_HOST", "localhost")
+MYSQL_PORT = int(os.getenv("MYSQL_PORT", "3306"))
+MYSQL_USER = os.getenv("MYSQL_USER", "root")
+MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "")
+MYSQL_DB = os.getenv("MYSQL_DB", "openfriday")
 DEFAULT_TOKEN = os.getenv("GATEWAY_TOKEN", "39353e14566ccc5caf8f6d588366b27a81f005e28b81b68c")
 
-# ============== Supabase 客户端 ==============
-class SupabaseClient:
-    def __init__(self, url: str, key: str):
-        self.url = url
-        self.key = key
-        self.headers = {
-            "apikey": key,
-            "Authorization": f"Bearer {key}",
-            "Content-Type": "application/json",
-            "Prefer": "return=representation"
-        }
-    
-    async def get(self, table: str, filters: dict = None):
-        async with httpx.AsyncClient() as client:
-            params = filters or {}
-            resp = await client.get(
-                f"{self.url}/rest/v1/{table}",
-                headers=self.headers,
-                params=params
-            )
-            if resp.status_code >= 400:
-                return {"error": resp.text}
-            return resp.json()
-    
-    async def post(self, table: str, data: dict):
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                f"{self.url}/rest/v1/{table}",
-                headers=self.headers,
-                json=data
-            )
-            if resp.status_code >= 400:
-                return {"error": resp.text}
-            return resp.json()
-    
-    async def patch(self, table: str, filters: dict, data: dict):
-        async with httpx.AsyncClient() as client:
-            # 构建 filter 字符串
-            filter_str = ",".join([f"{k}=eq.{v}" for k, v in filters.items()])
-            resp = await client.patch(
-                f"{self.url}/rest/v1/{table}?{filter_str}",
-                headers=self.headers,
-                json=data
-            )
-            if resp.status_code >= 400:
-                return {"error": resp.text}
-            return resp.json()
-    
-    async def delete(self, table: str, filters: dict):
-        async with httpx.AsyncClient() as client:
-            filter_str = ",".join([f"{k}=eq.{v}" for k, v in filters.items()])
-            resp = await client.delete(
-                f"{self.url}/rest/v1/{table}?{filter_str}",
-                headers=self.headers
-            )
-            if resp.status_code >= 400:
-                return {"error": resp.text}
-            return {"success": True}
-
-db = SupabaseClient(SUPABASE_URL, SUPABASE_KEY)
+db = MySQLClient(MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DB)
 
 # ============== 数据模型 ==============
 class HeartbeatRequest(BaseModel):

@@ -9,7 +9,7 @@ import logging
 
 from app.core.websocket import manager
 from api.proxy import _require_user_device
-from app.core.supabase import get_db
+from app.core.db import get_db
 
 router = APIRouter(prefix="/models", tags=["models"])
 logger = logging.getLogger(__name__)

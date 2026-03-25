@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from app.config import WECHAT_APP_ID, WECHAT_APP_SECRET
 from app.core.security import make_auth_token
 from app.core.sms import check_code, send_verification_code, verify_code
-from app.core.supabase import get_db
+from app.core.db import get_db
 
 router = APIRouter(prefix="/api/auth", tags=["认证"])
 

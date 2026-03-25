@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 
 from app.core.security import parse_user_from_auth_header
-from app.core.supabase import get_db
+from app.core.db import get_db
 from app.core.websocket import manager
 
 router = APIRouter(prefix="/devices", tags=["网关"])

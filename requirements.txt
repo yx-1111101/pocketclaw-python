@@ -7,3 +7,4 @@ pycryptodome
 python-multipart
 redis[asyncio]
 pyyaml
+aiomysql

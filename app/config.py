@@ -1,9 +1,12 @@
 """配置管理"""
 import os
 
-# Supabase 配置（持久化存储）
-SUPABASE_URL = os.getenv("SUPABASE_URL", "https://irbnhwtyhzltpjiuuyql.supabase.co")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlyYm5od3R5aHpsdHBqaXV1eXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MzMzMDc3NCwiZXhwIjoyMDg4OTA2Nzc0fQ.u0qwNGdrtniSxIlihYKpbM6HWh10UXlxPCE4y8-8Blk")
+# MySQL 配置（持久化存储）
+MYSQL_HOST = os.getenv("MYSQL_HOST", "localhost")
+MYSQL_PORT = int(os.getenv("MYSQL_PORT", "3306"))
+MYSQL_USER = os.getenv("MYSQL_USER", "root")
+MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "")
+MYSQL_DB = os.getenv("MYSQL_DB", "openfriday")
 
 # Redis 配置（可选，用于 redis_db 后端）
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")

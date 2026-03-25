@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Load pricing data from YAML into Supabase llm_pricing table.
+"""Load pricing data from YAML into MySQL llm_pricing table.
 
 YAML format (pricing.yaml):
   pricing:
@@ -14,13 +14,16 @@ import asyncio
 import sys
 from pathlib import Path
 import yaml
-import httpx
+import aiomysql
 
 
-async def load_pricing_to_supabase(
+async def load_pricing_to_mysql(
     yaml_path: str,
-    supabase_url: str,
-    supabase_key: str,
+    host: str,
+    port: int,
+    user: str,
+    password: str,
+    database: str,
 ) -> None:
     with open(yaml_path, encoding="utf-8") as f:
         data = yaml.safe_load(f)
@@ -31,35 +34,38 @@ async def load_pricing_to_supabase(
         return
 
     records = [
-        {
-            "model":        entry["model"],
-            "provider":     entry["provider"],
-            "request_type": entry["request_type"],
-            "currency_type": entry["currency"].upper(),
-            "input_price":  entry["input"],
-            "output_price": entry["output"],
-        }
+        (
+            entry["model"],
+            entry["provider"],
+            entry["request_type"],
+            entry["currency"].upper(),
+            entry["input"],
+            entry["output"],
+        )
         for entry in entries
     ]
 
-    headers = {
-        "apikey": supabase_key,
-        "Authorization": f"Bearer {supabase_key}",
-        "Content-Type": "application/json",
-        "Prefer": "resolution=merge-duplicates,return=minimal",
-    }
-
     print(f"Loading {len(records)} pricing records into llm_pricing...")
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.post(
-            f"{supabase_url.rstrip('/')}/rest/v1/llm_pricing",
-            headers=headers,
-            json=records,
-        )
-        if resp.status_code >= 400:
-            print(f"Error {resp.status_code}: {resp.text}")
-            sys.exit(1)
+    pool = await aiomysql.create_pool(
+        host=host, port=port, user=user, password=password,
+        db=database, autocommit=True, charset="utf8mb4",
+    )
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.executemany(
+                """INSERT INTO `llm_pricing`
+                   (`model`, `provider`, `request_type`, `currency_type`, `input_price`, `output_price`)
+                   VALUES (%s, %s, %s, %s, %s, %s)
+                   ON DUPLICATE KEY UPDATE
+                       `currency_type` = VALUES(`currency_type`),
+                       `input_price`   = VALUES(`input_price`),
+                       `output_price`  = VALUES(`output_price`),
+                       `updated_at`    = CURRENT_TIMESTAMP""",
+                records,
+            )
+    pool.close()
+    await pool.wait_closed()
 
     print(f"Successfully loaded {len(records)} pricing records")
 
@@ -67,11 +73,14 @@ async def load_pricing_to_supabase(
 async def main() -> None:
     import os
 
-    supabase_url = os.environ.get("SUPABASE_URL", "https://irbnhwtyhzltpjiuuyql.supabase.co")
-    supabase_key = os.environ.get("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlyYm5od3R5aHpsdHBqaXV1eXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MzMzMDc3NCwiZXhwIjoyMDg4OTA2Nzc0fQ.u0qwNGdrtniSxIlihYKpbM6HWh10UXlxPCE4y8-8Blk")
+    host = os.environ.get("MYSQL_HOST", "localhost")
+    port = int(os.environ.get("MYSQL_PORT", "3306"))
+    user = os.environ.get("MYSQL_USER", "root")
+    password = os.environ.get("MYSQL_PASSWORD", "")
+    database = os.environ.get("MYSQL_DB", "openfriday")
 
-    if not supabase_url or not supabase_key:
-        print("Error: SUPABASE_URL and SUPABASE_KEY environment variables required")
+    if not host or not user:
+        print("Error: MYSQL_HOST and MYSQL_USER environment variables required")
         sys.exit(1)
 
     yaml_path = sys.argv[1] if len(sys.argv) > 1 else "llm_proxy/pricing.yaml"
@@ -80,7 +89,7 @@ async def main() -> None:
         print(f"Error: pricing file not found: {yaml_path}")
         sys.exit(1)
 
-    await load_pricing_to_supabase(yaml_path, supabase_url, supabase_key)
+    await load_pricing_to_mysql(yaml_path, host, port, user, password, database)
 
 
 if __name__ == "__main__":
