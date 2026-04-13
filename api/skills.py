@@ -398,6 +398,53 @@ async def search_skills(
         return {"success": False, "error": str(e), "items": [], "count": 0}
 
 
+@router.get("/market")
+async def get_skill_market(
+    device_id: str = None,
+    request: Request = None,
+    category: str = "",
+    q: str = "",
+):
+    """获取技能市场列表 - 从设备 file-server 获取"""
+    if not request:
+        return {"success": False, "error": "device_id required", "skills": [], "featured": None}
+    
+    try:
+        device_id = await _resolve_and_auth_device(request=request, device_id=device_id)
+        if not device_id:
+            return {"success": False, "error": "device_id required", "skills": [], "featured": None}
+        
+        params: Dict[str, Any] = {}
+        if category:
+            params["category"] = category
+        if q:
+            params["q"] = q
+        
+        result = await manager.send_request(
+            device_id,
+            "api/skills/market",
+            {},
+            method="GET",
+            query=params,
+            timeout=15.0,
+        )
+        payload = _rpc_payload(result)
+        
+        if isinstance(payload, dict) and payload.get("success") is False:
+            return payload
+        if isinstance(payload, dict) and payload.get("error"):
+            return {"success": False, "error": payload.get("error"), "skills": [], "featured": None}
+        
+        return {
+            "success": True,
+            "skills": payload.get("skills", []),
+            "featured": payload.get("featured"),
+        }
+    except Exception as e:
+        logger.error(f"Exception: {e}")
+        return {"success": False, "error": str(e), "skills": [], "featured": None}
+
+
 @router.get("/{skill_id}")
 async def get_skill(skill_id: str, device_id: str = None, request: Request = None):
     """获取技能详情"""
@@ -426,7 +473,6 @@ async def get_skill(skill_id: str, device_id: str = None, request: Request = Non
         return {"success": False, "error": str(e)}
 
 
-
 @router.post("/install")
 async def install_skill(device_id: str = None, request: Request = None):
     """安装新技能（走设备 file-server 的 /skills/install，底层由 ClawHub 处理）"""
@@ -448,11 +494,9 @@ async def install_skill(device_id: str = None, request: Request = None):
         if version:
             params["version"] = version
 
-        # 使用路径函数触发设备端 HTTP /skills/install，不走 Gateway skills.install。
         result = await manager.send_request(device_id, "skills/install", params, method="POST", timeout=120.0)
         payload = _rpc_payload(result)
 
-        # file-server 通常会返回 {success: bool, ...}
         if isinstance(payload, dict) and payload.get("success") is False:
             return payload
         if isinstance(payload, dict) and payload.get("error"):
