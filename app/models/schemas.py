@@ -24,3 +24,19 @@ class WechatLoginRequest(BaseModel):
 class WechatBindPhoneRequest(BaseModel):
     openid: str
     phone: Optional[str] = None
+
+
+class GatewayRegisterRequest(BaseModel):
+    device_id: Optional[str] = None
+    source_type: str = "gateway"
+    runtime: Optional[str] = None
+    firmware_version: Optional[str] = None
+
+
+class GatewayPairRequest(BaseModel):
+    credential_code: str
+    source: Optional[str] = None
+
+
+class GatewayUpdateRequest(BaseModel):
+    display_name: Optional[str] = None

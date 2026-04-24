@@ -40,8 +40,11 @@ CREATE TABLE IF NOT EXISTS devices (
     firmware_version VARCHAR(255) NULL,
     pairing_code_hash VARCHAR(255) NULL,
     pairing_code_expires TIMESTAMP NULL,
+    source_type VARCHAR(50) NULL DEFAULT 'legacy',
+    runtime VARCHAR(255) NULL,
     status VARCHAR(50) NULL DEFAULT 'offline',
     last_seen TIMESTAMP NULL,
+    last_used_at TIMESTAMP NULL,
     provisioned_at TIMESTAMP NULL,
     created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -75,6 +78,7 @@ CREATE TABLE IF NOT EXISTS device_bindings (
     user_id VARCHAR(255) NOT NULL,
     device_id VARCHAR(255) NOT NULL,
     role VARCHAR(50) NULL DEFAULT 'owner',
+    display_name VARCHAR(255) NULL,
     created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
     UNIQUE KEY device_bindings_user_id_device_id_key (user_id, device_id)
@@ -276,3 +280,47 @@ CREATE TABLE IF NOT EXISTS llm_credit (
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- ==========================
+-- Table: pairing_credentials
+-- ==========================
+CREATE TABLE IF NOT EXISTS pairing_credentials (
+    id BIGINT NOT NULL AUTO_INCREMENT,
+    device_id VARCHAR(255) NOT NULL,
+    credential_code VARCHAR(16) NOT NULL,
+    credential_hash VARCHAR(255) NOT NULL,
+    runtime VARCHAR(255) NULL,
+    expires_at TIMESTAMP NOT NULL,
+    attempt_count INT NOT NULL DEFAULT 0,
+    max_attempts INT NOT NULL DEFAULT 5,
+    used TINYINT(1) NOT NULL DEFAULT 0,
+    invalidated TINYINT(1) NOT NULL DEFAULT 0,
+    created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- pairing_credentials indexes
+SET @tbl := 'pairing_credentials';
+SET @idx := 'idx_pairing_credentials_device_id';
+SET @sql := IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=@tbl AND INDEX_NAME=@idx)=0,
+    CONCAT('CREATE INDEX ', @idx, ' ON ', @tbl, '(device_id)'),
+    'SELECT "Index exists, skipped"');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @idx := 'idx_pairing_credentials_credential_hash';
+SET @sql := IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=@tbl AND INDEX_NAME=@idx)=0,
+    CONCAT('CREATE INDEX ', @idx, ' ON ', @tbl, '(credential_hash)'),
+    'SELECT "Index exists, skipped"');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @idx := 'idx_pairing_credentials_expires_at';
+SET @sql := IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=@tbl AND INDEX_NAME=@idx)=0,
+    CONCAT('CREATE INDEX ', @idx, ' ON ', @tbl, '(expires_at)'),
+    'SELECT "Index exists, skipped"');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;

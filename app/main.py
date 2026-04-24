@@ -28,7 +28,7 @@ from app.core.security import parse_auth_token, parse_user_from_auth_header
 from app.core.db import get_db, init_db
 from app.core.redis_cache import init_cache
 from app.core.websocket import manager
-from api import device, wechat, proxy, cron, skills, sessions, models, channels, mcp, tools, usage, billing
+from api import device, wechat, proxy, cron, skills, sessions, models, channels, mcp, tools, usage, billing, gateway
 
 # 初始化 MySQL（持久化存储）和 Redis（缓存）
 init_db(MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DB)
@@ -63,6 +63,7 @@ app.include_router(tools.router)
 app.include_router(tools.acp_router)
 app.include_router(usage.router)
 app.include_router(billing.router)
+app.include_router(gateway.router)
 
 
 def _truncate_text(text: str, limit: int = 2000) -> str:
@@ -550,6 +551,12 @@ async def proxy_websocket(websocket: WebSocket, device_id: str):
                 )
                 for msg in converted:
                     await _broadcast_stream_clients(device_id, msg, targets=targets)
+                # 同时广播原始 Gateway event 格式，供 Web 前端使用
+                await _broadcast_stream_clients(device_id, {
+                    "type": "event",
+                    "event": event_name,
+                    "payload": payload if isinstance(payload, dict) else {},
+                }, targets=targets)
                 if converted:
                     continue
 
@@ -860,13 +867,28 @@ async def stream_websocket(
                     }, ensure_ascii=False))
                 else:
                     await websocket.send_text(json.dumps({"type": "pong"}, ensure_ascii=False))
-            elif msg_type == "req" and req_id:
-                await websocket.send_text(json.dumps({
-                    "type": "res",
-                    "id": req_id,
-                    "ok": False,
-                    "error": f"unsupported method: {method or action or ''}",
-                }, ensure_ascii=False))
+            elif msg_type == "req" and req_id and method:
+                # 通用 RPC 转发：将请求代理到设备端
+                if not manager.is_connected(device_id):
+                    await websocket.send_text(json.dumps({
+                        "type": "res", "id": req_id, "ok": False,
+                        "error": "Device not connected",
+                    }, ensure_ascii=False))
+                    continue
+                try:
+                    resp = await manager.send_request(
+                        device_id, method, req_params, timeout=30.0,
+                    )
+                    resp_data = resp.get("data") if isinstance(resp, dict) else resp
+                    await websocket.send_text(json.dumps({
+                        "type": "res", "id": req_id, "ok": True,
+                        "payload": resp_data if isinstance(resp_data, dict) else {},
+                    }, ensure_ascii=False))
+                except Exception as rpc_err:
+                    await websocket.send_text(json.dumps({
+                        "type": "res", "id": req_id, "ok": False,
+                        "error": str(rpc_err),
+                    }, ensure_ascii=False))
 
     except WebSocketDisconnect:
         logger.info("[ws_stream] disconnect user_id=%s device_id=%s", user_id, device_id)
