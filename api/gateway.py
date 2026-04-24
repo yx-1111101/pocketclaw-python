@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 
 from app.core.security import hash_sha256, extract_bearer_token, parse_auth_token, parse_user_from_auth_header
 from app.core.db import get_db
+from app.core.websocket import manager
 from app.models.schemas import GatewayRegisterRequest, GatewayPairRequest, GatewayUpdateRequest
 from api.device import is_online
 
@@ -98,15 +99,31 @@ async def _require_auth_user(db, request: Request) -> dict:
     return user
 
 
+def _infer_source_type(device: dict) -> str:
+    """从 device_id 前缀推断 source_type，兼容旧 legacy 记录。"""
+    device_id = device.get("device_id", "")
+    stored = device.get("source_type", "legacy")
+    if stored and stored not in ("legacy", ""):
+        return stored
+    if device_id.startswith("fri-"):
+        return "friday"
+    if device_id.startswith("gw-"):
+        return "external"
+    return stored or "legacy"
+
+
 def _normalize_gateway(device: dict, binding: dict = None) -> dict:
     """标准化 API 响应中的 gateway 对象"""
+    device_id = device.get("device_id", "")
+    # 优先使用实时 WS 连接状态，兜底用 last_seen 时间戳
+    online = manager.is_connected(device_id) or is_online(device)
     return {
-        "device_id": device.get("device_id", ""),
+        "device_id": device_id,
         "display_name": (binding or {}).get("display_name") or device.get("name") or "我的盒子",
-        "source_type": device.get("source_type", "legacy"),
+        "source_type": _infer_source_type(device),
         "runtime": device.get("runtime") or None,
         "firmware_version": device.get("firmware_version") or None,
-        "is_online": is_online(device),
+        "is_online": online,
         "last_used_at": str(device.get("last_used_at") or "") or None,
         "created_at": str(device.get("created_at") or "") or None,
     }
