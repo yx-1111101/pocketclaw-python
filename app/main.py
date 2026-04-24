@@ -769,6 +769,14 @@ async def stream_websocket(
 
                     # 兜底：若设备直接同步返回结果而没有后续 stream 事件，直接回 stream_end 给客户端
                     final_text = _extract_chat_text(resp_data)
+                    # 若设备返回错误（无 runId、有 error 字段），透传错误内容让客户端可见
+                    if not final_text and isinstance(resp_data, dict) and resp_data.get("error") and not run_id_from_resp:
+                        detail = resp_data.get("detail") or resp_data.get("error")
+                        final_text = f"[错误] {detail}"
+                        logger.warning(
+                            "[ws_stream] chat.send error from device user_id=%s device_id=%s error=%s",
+                            user_id, device_id, detail,
+                        )
                     if final_text or done_flag or not run_id_from_resp:
                         request_id = (
                             (rpc_request_id or None)
