@@ -165,6 +165,14 @@ EOF
 fi
 
 # ── 5. 启动连接器 ─────────────────────────────────────────────────────────────
+# 先停止旧实例，避免多个进程同时运行
+OLD_PIDS=$(pgrep -f "$INSTALL_DIR/reverse_proxy.py" 2>/dev/null || true)
+if [ -n "$OLD_PIDS" ]; then
+    echo "  ℹ 检测到旧实例 (pid: $OLD_PIDS)，正在停止..."
+    kill $OLD_PIDS 2>/dev/null || true
+    sleep 1
+fi
+
 echo "[4/4] 启动 Gateway 连接器..."
 echo ""
 echo "═══════════════════════════════════════════════"
