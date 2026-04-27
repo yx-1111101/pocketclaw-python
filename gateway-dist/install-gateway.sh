@@ -30,6 +30,8 @@ echo ""
 # ── 1. 检测/安装 OpenClaw ─────────────────────────────────────────────────────
 echo "[1/4] 检测 OpenClaw..."
 
+OPENCLAW_CONFIGURED=true  # 已安装的默认视为已配置
+
 if command -v openclaw &>/dev/null; then
     echo "  ✓ OpenClaw 已安装（将作为本地运行时使用）"
 else
@@ -79,6 +81,22 @@ else
     npm install -g "openclaw@latest" \
         || { echo "  ✗ openclaw 安装失败，请检查网络或手动安装 npm 包"; exit 1; }
     echo "  ✓ OpenClaw 安装完成"
+
+    # 询问是否立即配置（模型、API 密钥等）
+    # 注：curl | bash 时 stdin 是管道，需通过 /dev/tty 读取终端输入
+    echo ""
+    echo "  建议现在完成 OpenClaw 初始配置（模型、API 密钥等）。"
+    echo "  跳过后也可运行 'openclaw configure' 单独完成。"
+    printf "  立即配置 OpenClaw? [Y/n] "
+    read -r _configure_choice </dev/tty 2>/dev/null || _configure_choice="n"
+    echo ""
+    if [[ "${_configure_choice:-y}" =~ ^[Yy]$ ]] || [ -z "$_configure_choice" ]; then
+        openclaw setup 2>/dev/null || true
+        openclaw configure </dev/tty
+    else
+        echo "  ℹ 跳过配置，连接器仍可正常启动和配对。"
+        OPENCLAW_CONFIGURED=false
+    fi
 fi
 
 # ── 2. 检测 Python ────────────────────────────────────────────────────────────
@@ -153,6 +171,11 @@ echo "════════════════════════�
 echo "  连接器启动后会显示 8 位配对码（如 A3BF-K92M）"
 echo "  请在 Web 管理界面 > 添加外部 Gateway 中输入"
 echo "═══════════════════════════════════════════════"
+if [ "${OPENCLAW_CONFIGURED:-true}" = false ]; then
+    echo ""
+    echo "  ⚠ 提醒：OpenClaw 尚未配置，配对完成后 AI 对话功能暂不可用。"
+    echo "    请在方便时运行：openclaw configure"
+fi
 echo ""
 
 cd "$INSTALL_DIR"
