@@ -13,18 +13,23 @@
 
 import asyncio
 import base64
+import hashlib
 import json
 import logging
 import mimetypes
 import os
 import re
 import time
+import uuid
 from pathlib import Path
 from typing import Optional
 from dataclasses import dataclass
 
 import httpx
 import websockets
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.serialization import load_pem_private_key, load_pem_public_key
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from websockets.exceptions import ConnectionClosed
 from websockets.protocol import State
 
@@ -498,6 +503,63 @@ async def _handle_request(
         return {"request_id": request_id, "data": {"error": str(e)}}
 
 
+# ---------------------------------------------------------------------------
+# Device Identity helpers – implements OpenClaw Ed25519 device auth protocol
+# ---------------------------------------------------------------------------
+
+_ED25519_SPKI_PREFIX = bytes.fromhex("302a300506032b6570032100")
+
+
+def _base64url_encode(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+
+def _derive_public_key_raw(public_key_pem: str) -> bytes:
+    """Extract the 32-byte raw Ed25519 public key from a PEM."""
+    pub = load_pem_public_key(public_key_pem.encode())
+    spki = pub.public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
+    prefix_len = len(_ED25519_SPKI_PREFIX)
+    if len(spki) == prefix_len + 32 and spki[:prefix_len] == _ED25519_SPKI_PREFIX:
+        return spki[prefix_len:]
+    return spki
+
+
+def _load_device_identity() -> Optional[dict]:
+    """Load ~/.openclaw/identity/device.json if it exists."""
+    path = Path.home() / ".openclaw" / "identity" / "device.json"
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text())
+        if data.get("version") == 1 and data.get("privateKeyPem") and data.get("publicKeyPem"):
+            return data
+    except Exception as e:
+        log.warning(f"[DeviceIdentity] 无法加载 {path}: {e}")
+    return None
+
+
+def _sign_device_payload(private_key_pem: str, payload: str) -> str:
+    """Sign a UTF-8 payload with an Ed25519 private key, return base64url signature."""
+    key: Ed25519PrivateKey = load_pem_private_key(private_key_pem.encode(), password=None)  # type: ignore
+    sig = key.sign(payload.encode("utf-8"))
+    return _base64url_encode(sig)
+
+
+def _build_device_auth_payload_v3(
+    device_id: str, client_id: str, client_mode: str,
+    role: str, scopes: list[str], signed_at_ms: int,
+    token: str, nonce: str, platform: str, device_family: str = "",
+) -> str:
+    """Reproduce OpenClaw's buildDeviceAuthPayloadV3 in Python."""
+    scopes_str = ",".join(scopes)
+    platform_norm = platform.strip().lower() if platform else ""
+    family_norm = device_family.strip().lower() if device_family else ""
+    return "|".join([
+        "v3", device_id, client_id, client_mode, role, scopes_str,
+        str(signed_at_ms), token, nonce, platform_norm, family_norm,
+    ])
+
+
 class GatewayBridge:
     """
     维护一个到 OpenClaw Gateway 的 WebSocket 长连接。
@@ -506,6 +568,11 @@ class GatewayBridge:
 
     def __init__(self, gateway_token: str):
         self.gateway_token = gateway_token
+        self._device_identity = _load_device_identity()
+        if self._device_identity:
+            log.info("[GatewayBridge] device identity 已加载: %s", self._device_identity["deviceId"][:16] + "...")
+        else:
+            log.warning("[GatewayBridge] 未找到 device identity，将以 insecure 模式连接")
         self._ws: Optional[websockets.WebSocketClientProtocol] = None
         self._authenticated = False
         # 流式监听器：必须支持“同一个 sessionKey 并发多请求/多客户端”
@@ -572,19 +639,52 @@ class GatewayBridge:
                     continue
 
                 if data.get("type") == "event" and data.get("event") == "connect.challenge":
+                    challenge_nonce = data.get("payload", {}).get("nonce", "")
+                    role = "operator"
+                    scopes = ["operator.read", "operator.write", "operator.admin"]
+                    client_id = "openclaw-tui"
+                    client_mode = "cli"
+                    platform = "linux"
+
+                    device_field = None
+                    if self._device_identity and challenge_nonce:
+                        signed_at_ms = int(time.time() * 1000)
+                        payload = _build_device_auth_payload_v3(
+                            device_id=self._device_identity["deviceId"],
+                            client_id=client_id, client_mode=client_mode,
+                            role=role, scopes=scopes,
+                            signed_at_ms=signed_at_ms,
+                            token=self.gateway_token or "",
+                            nonce=challenge_nonce, platform=platform,
+                        )
+                        signature = _sign_device_payload(
+                            self._device_identity["privateKeyPem"], payload,
+                        )
+                        pub_raw = _derive_public_key_raw(self._device_identity["publicKeyPem"])
+                        device_field = {
+                            "id": self._device_identity["deviceId"],
+                            "publicKey": _base64url_encode(pub_raw),
+                            "signature": signature,
+                            "signedAt": signed_at_ms,
+                            "nonce": challenge_nonce,
+                        }
+
+                    connect_params = {
+                        "minProtocol": 3, "maxProtocol": 3,
+                        "role": role, "scopes": scopes,
+                        "auth": {"token": self.gateway_token},
+                        "client": {"id": client_id, "version": "1.0.0",
+                                "platform": platform, "mode": client_mode},
+                        "caps": ["tool-events"],
+                        "commands": [],
+                        "permissions": {},
+                    }
+                    if device_field:
+                        connect_params["device"] = device_field
+
                     await self._ws.send(json.dumps({
                         "type": "req", "id": "1", "method": "connect",
-                        "params": {
-                            "minProtocol": 3, "maxProtocol": 3,
-                            "role": "operator",
-                            "scopes": ["operator.read", "operator.write", "operator.admin"],
-                            "auth": {"token": self.gateway_token},
-                            "client": {"id": "openclaw-tui", "version": "1.0.0",
-                                    "platform": "linux", "mode": "cli"},
-                            "caps": ["tool-events"],
-                            "commands": [],
-                            "permissions": {},
-                        },
+                        "params": connect_params,
                     }))
                     continue
 
