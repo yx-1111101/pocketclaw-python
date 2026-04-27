@@ -1129,6 +1129,24 @@ async def _run_proxy(cloud_ws_url: str, device_id: str, gateway_token: str,
                                         }))
                                 continue
 
+                            # setup.proxy RPC：前端通过 WebSocket 代理 setup-server 请求
+                            if function == "setup.proxy":
+                                http_method = params.get("http_method", "GET").upper()
+                                http_path = params.get("path", "/")
+                                http_body = params.get("body")
+                                proxy_fn = f"setup{http_path}"
+                                proxy_params = {"_method": http_method}
+                                if http_body and isinstance(http_body, dict):
+                                    proxy_params.update(http_body)
+                                if gateway_token:
+                                    proxy_params["_headers"] = {"Authorization": f"Bearer {gateway_token}"}
+                                response = await _handle_request(
+                                    client, request_id, proxy_fn, proxy_params
+                                )
+                                await ws.send(json.dumps(response))
+                                log.debug(f"已回复: id={request_id} fn={function} → {http_method} {http_path}")
+                                continue
+
                             # 路由判断：含 "/" → HTTP 路径风格；否则 → Gateway RPC
                             is_http = any(function.startswith(entry[0]) for entry in ROUTE_TABLE) or "/" in function
 
