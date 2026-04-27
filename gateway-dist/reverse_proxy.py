@@ -957,15 +957,20 @@ async def _run_proxy(cloud_ws_url: str, device_id: str, gateway_token: str,
     gw_bridge = GatewayBridge(gateway_token)
 
     # 启动周期性心跳后台任务
-    if cloud_api_url:
+    # 外部 Gateway（gw- 前缀）无 openclaw_device_state，跳过旧 heartbeat 流程；
+    # 云端通过 WebSocket 连接状态感知在线，无需额外心跳
+    _is_external_gw = device_id.startswith("gw-")
+    if cloud_api_url and not _is_external_gw:
         from heartbeat import heartbeat_loop
         asyncio.create_task(heartbeat_loop(
             cloud_api_url=cloud_api_url,
             interval_sec=heartbeat_interval,
             firmware_version=firmware_version,
         ))
-    else:
+    elif not cloud_api_url:
         log.info("cloud_api_url 未配置，跳过周期性心跳")
+    else:
+        log.info("外部 Gateway 模式，跳过 heartbeat（云端以 WebSocket 连接感知在线状态）")
 
     async with httpx.AsyncClient() as client:
         while True:
