@@ -141,8 +141,9 @@ def _parse_device_bearer(request: Request):
         payload = parse_auth_token(token)
         device_id = str(payload.get("device_id") or payload.get("user_id") or "").strip()
         return device_id if device_id else None, None
-    except Exception as e:
-        return None, str(e)
+    except Exception:
+        # Bearer 不是 JWT（可能是 raw device_secret），静默跳过，交由后续路径验证
+        return None, None
 
 
 # ── 端点 ──────────────────────────────────────────────────────────
