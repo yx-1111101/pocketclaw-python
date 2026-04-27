@@ -114,8 +114,8 @@ echo "  ✓ Python $PY_VER"
 # ── 3. 安装 Python 依赖 ───────────────────────────────────────────────────────
 echo "[2/4] 安装 Python 依赖..."
 
-if $PYTHON -c "import websockets, httpx" 2>/dev/null; then
-    echo "  ✓ websockets、httpx 已安装，跳过"
+if $PYTHON -c "import websockets, httpx, cryptography" 2>/dev/null; then
+    echo "  ✓ websockets、httpx、cryptography 已安装，跳过"
 else
     # 确保 pip 可用（Ubuntu 上可能未预装）
     if ! $PYTHON -m pip --version &>/dev/null; then
@@ -123,10 +123,10 @@ else
         sudo apt-get install -y python3-pip \
             || { echo "  ✗ 无法安装 pip，请手动运行: sudo apt install python3-pip"; exit 1; }
     fi
-    $PYTHON -m pip install --quiet --user websockets httpx 2>/dev/null \
-        || $PYTHON -m pip install --quiet websockets httpx 2>/dev/null \
-        || { echo "  ✗ pip 安装失败，请手动运行: pip install websockets httpx"; exit 1; }
-    echo "  ✓ websockets、httpx 已就绪"
+    $PYTHON -m pip install --quiet --user websockets httpx cryptography 2>/dev/null \
+        || $PYTHON -m pip install --quiet websockets httpx cryptography 2>/dev/null \
+        || { echo "  ✗ pip 安装失败，请手动运行: pip install websockets httpx cryptography"; exit 1; }
+    echo "  ✓ websockets、httpx、cryptography 已就绪"
 fi
 
 # ── 4. 下载连接器 ─────────────────────────────────────────────────────────────
