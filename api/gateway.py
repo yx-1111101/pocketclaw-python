@@ -1,4 +1,5 @@
 """Gateway 管理 API"""
+import hmac
 import logging
 import secrets
 import uuid
@@ -196,15 +197,32 @@ async def register_gateway(data: GatewayRegisterRequest, request: Request):
         device = await _fetch_single(db, "devices", {"device_id": device_id})
 
         if device:
-            # 存量设备升级：已有记录但无 secret
+            # 存量设备（已有密钥）：需要 Bearer device_secret 验证后才能刷新凭证
             if device.get("device_secret_hash"):
-                return _gateway_error(
-                    "ALREADY_REGISTERED",
-                    "该设备已注册且有密钥，请使用 Bearer 认证刷新凭证",
-                    409,
-                )
+                bearer = extract_bearer_token(request.headers.get("Authorization", ""))
+                if not bearer:
+                    return _gateway_error(
+                        "ALREADY_REGISTERED",
+                        "设备已注册，请携带 device_secret 作为 Bearer Token 刷新凭证",
+                        409,
+                    )
+                provided_hash = hash_sha256(bearer)
+                if not hmac.compare_digest(provided_hash, device["device_secret_hash"]):
+                    return _gateway_error("INVALID_SECRET", "device_secret 验证失败", 401)
 
-            # 分配 secret
+                update_payload = {"updated_at": now}
+                if data.firmware_version:
+                    update_payload["firmware_version"] = data.firmware_version
+                if data.runtime:
+                    update_payload["runtime"] = data.runtime
+                if data.source_type and data.source_type != "gateway":
+                    update_payload["source_type"] = data.source_type
+                await db.patch("devices", {"device_id": device_id}, update_payload)
+                await _invalidate_device_credentials(db, device_id)
+                credential = await _create_credential(db, device_id, data.runtime)
+                return {"success": True, "device_id": device_id, "credential": credential}
+
+            # 存量设备无 secret → 分配 secret
             device_secret = secrets.token_urlsafe(32)
             secret_hash = hash_sha256(device_secret)
             update_payload = {

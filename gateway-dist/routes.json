@@ -1,0 +1,40 @@
+{
+  "_comment": "HTTP 路由白名单（前缀匹配）。仅对 function 含 '/' 的 HTTP 请求生效；Gateway RPC（不含 '/'）不受限制。如需远程调用 health 等无 '/' 的 HTTP 端点，请改用 files/health 格式。",
+
+  "http_whitelist": [
+    "setup/api/config",
+    "setup/api/services",
+    "setup/api/builtin-keys",
+    "setup/api/models",
+    "setup/api/tunnel",
+    "setup/api/skills",
+    "setup/api/agents",
+    "setup/api/skill-repo",
+
+    "api/files",
+    "api/upload",
+    "api/download",
+    "api/delete",
+    "api/asr",
+    "api/tts",
+    "api/speaker",
+    "api/session",
+    "api/history",
+    "api/auth",
+    "api/skills",
+
+    "v1/chat/completions",
+
+    "llm/api/config",
+    "llm/api/sources",
+    "llm/api/models",
+    "llm/api/session/model",
+    "llm/monitor/start",
+    "llm/monitor/end",
+    "llm/api/router",
+
+    "agents",
+    "sessions",
+    "chat/history"
+  ]
+}

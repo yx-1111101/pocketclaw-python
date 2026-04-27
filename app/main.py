@@ -991,6 +991,28 @@ async def get_file(filename: str):
         return JSONResponse(status_code=404, content={"error": "not found"})
     return FResp(path)
 
+# ── Gateway 连接器下载（install script + daemon 文件）──────────────────────
+GATEWAY_DIST_DIR = Path(__file__).parent.parent / "gateway-dist"
+
+@app.get("/install/gateway")
+async def install_gateway_script():
+    """安装脚本入口：curl -fsSL https://yixuan-site.cn/install/gateway | bash"""
+    script = GATEWAY_DIST_DIR / "install-gateway.sh"
+    if not script.exists():
+        return JSONResponse({"error": "安装脚本尚未部署"}, status_code=503)
+    return FileResponse(script, media_type="text/plain; charset=utf-8")
+
+@app.get("/downloads/gateway/{filename}")
+async def download_gateway_file(filename: str):
+    """下载 Gateway 连接器文件（reverse_proxy.py, heartbeat.py 等）"""
+    allowed = {"reverse_proxy.py", "heartbeat.py", "routes.json"}
+    if filename not in allowed:
+        return JSONResponse({"error": "不允许下载该文件"}, status_code=403)
+    file_path = GATEWAY_DIST_DIR / filename
+    if not file_path.exists():
+        return JSONResponse({"error": "文件尚未部署"}, status_code=503)
+    return FileResponse(file_path, media_type="text/plain; charset=utf-8")
+
 # ── 静态文件（必须放最后）────────────────────────────────────────────────────
 @app.get("/{path:path}")
 async def static_files(path: str):
