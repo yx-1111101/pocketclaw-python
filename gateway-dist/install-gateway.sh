@@ -160,7 +160,7 @@ p = '$CONFIG_FILE'
 cfg = json.load(open(p))
 cfg['cloud_api_url'] = '$CLOUD_API_URL'
 json.dump(cfg, open(p, 'w'), indent=2, ensure_ascii=False)
-print("  ✓ 配置文件已更新: $p")
+print("  ✓ 配置文件已更新: $CONFIG_FILE")
 EOF
 fi
 
